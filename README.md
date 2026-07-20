@@ -2,7 +2,7 @@
 
 A Go library for Apple's private iCloud / keychain services. It signs in to an
 Apple ID, joins the account's trust circle, and **decrypts your synced Passwords
-in clear text** — no Apple device, no Wine, no browser automation.
+in clear text**, no Apple device, no Wine, no browser automation.
 
 ```go
 login, _  := appleservices.BeginLogin(creds, store) // sign in (handle 2FA once)
@@ -24,8 +24,8 @@ for _, p := range pws {
 go get github.com/Laky-64/appleservices
 ```
 
-Pure Go. The only runtime dependency is an [anisette](https://github.com/SideStore/anisette-server-list)
-server for device-identity headers — the library uses the public pool by default.
+Pure Go. The only runtime dependency is an [anisette](https://github.com/SideStore/anisette-servers)
+server for device-identity headers, the library uses the public pool by default.
 
 ## Quick start
 
@@ -76,7 +76,7 @@ A complete runnable example (with a file-backed `Store`) lives in
 
 ```go
 type WebPassword struct {
-	Name     string    // display title, e.g. "Photon Engine" or "uwu"
+	Name     string    // display title, e.g. "Stoattish Password"
 	Domain   string    // site host (or an opaque id for a manual entry)
 	Website  bool      // true = website login, false = manually-added entry
 	Username string
@@ -95,7 +95,7 @@ code, err := p.TOTPCode(time.Now()) // "773933"
 
 ## The Store (required)
 
-The library never touches disk itself — you decide where its two pieces of state
+The library never touches disk itself, you decide where its two pieces of state
 live (a stable anisette **device identity**, and the GSA **trusted session** that
 lets later logins skip 2FA). Implement this tiny interface with files, a DB, an OS
 keychain, whatever:
@@ -111,7 +111,7 @@ type Session struct { DSID string; Cookies []Cookie }
 type Cookie  struct { URL, Name, Value string }
 ```
 
-A trivial file backend (JSON, 0600) — see `cmd/passwords/filestore.go`:
+A trivial file backend (JSON, 0600), see `cmd/passwords/filestore.go`:
 
 ```go
 func (s fileStore) SaveDevice(d *appleservices.Device) error {
@@ -125,7 +125,7 @@ func (s fileStore) SaveDevice(d *appleservices.Device) error {
 - **Two-factor is trusted-device only** (never SMS): SMS 2FA does not grant the
   Octagon trust needed to read the keychain, so the API doesn't offer it.
 - **Apple ID + password are needed on every run.** The stored session only skips
-  the 2FA *code prompt* — the password itself can't be avoided (both the GrandSlam
+  the 2FA *code prompt*, the password itself can't be avoided (both the GrandSlam
   login and the escrow recovery authenticate with it). Persist it in your own app
   behind a local unlock if you want convenience; the library won't store it for you.
 - The **device passcode** is what recovers the account's escrow key. It's passed
@@ -133,11 +133,45 @@ func (s fileStore) SaveDevice(d *appleservices.Device) error {
 
 ## How it works
 
-`BeginLogin`/`Client` → GrandSlam login (`gsa`) + anisette (`anisette`) + iCloud
-tokens (`icloud`) + CloudKit bootstrap (`cloudkit`). `Vault` → escrow SRP recovery (`escrow`) →
-Octagon bottle decrypt (`octagon`) → the sponsor peer keys → fetch the CKKS
-`Passwords` zone and unwrap its keys/items (`ckks`) → clear-text keychain items
-(`keychain`).
+```mermaid
+flowchart TD
+
+    subgraph LOGIN["🔐 BeginLogin"]
+        C[Client]
+        GSA["gsa<br/>GrandSlam Login"]
+        ANI["anisette<br/>Anisette Data"]
+        ICL["icloud<br/>iCloud Tokens"]
+        CKB["cloudkit<br/>CloudKit Bootstrap"]
+
+        C --> GSA
+        GSA --> ANI
+        ANI --> ICL
+        ICL --> CKB
+    end
+
+    CKB --> ESC
+
+    subgraph VAULT["🗄️ Vault Recovery"]
+        ESC["escrow<br/>SRP Recovery"]
+        OCT["octagon<br/>Bottle Decryption"]
+        PEER["Sponsor Peer Keys"]
+        CKKS["ckks<br/>Passwords Zone"]
+        KEY["keychain<br/>Clear-text Items"]
+
+        ESC --> OCT
+        OCT --> PEER
+        PEER --> CKKS
+        CKKS --> KEY
+    end
+
+    classDef login fill:#D6ECFF,stroke:#1976D2,stroke-width:2px,color:#000;
+    classDef vault fill:#E8F5E9,stroke:#388E3C,stroke-width:2px,color:#000;
+    classDef output fill:#FFF3E0,stroke:#F57C00,stroke-width:2px,color:#000;
+
+    class C,GSA,ANI,ICL,CKB login;
+    class ESC,OCT,PEER,CKKS vault;
+    class KEY output;
+```
 
 The library is layered: import a single stage (e.g. `gsa`, `ckks`) directly, or
 use the `appleservices` facade shown above.
@@ -150,4 +184,4 @@ same `ckks` path and are a small decoder away.
 
 ## License
 
-[MIT](LICENSE). No warranty. Not affiliated with Apple — use it on accounts you own.
+[MIT](LICENSE). No warranty. Not affiliated with Apple, use it on accounts you own.
