@@ -103,6 +103,9 @@ func run() error {
 		if code, err := pw.TOTPCode(time.Now()); err == nil {
 			fmt.Printf("\tTOTP=%s", code)
 		}
+		if len(pw.Domains) > 1 {
+			fmt.Printf("\tdomains=%s", strings.Join(pw.Domains, ","))
+		}
 		fmt.Println()
 	}
 	return nil
