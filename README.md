@@ -77,7 +77,8 @@ A complete runnable example (with a file-backed `Store`) lives in
 ```go
 type WebPassword struct {
 	Name     string    // display title, e.g. "Stoattish Password"
-	Domain   string    // site host (or an opaque id for a manual entry)
+	Domain   string    // primary site host (or an opaque id for a manual entry)
+	Domains  []string  // every web domain the login covers, e.g. tim.it + timvision.it
 	Website  bool      // true = website login, false = manually-added entry
 	Username string
 	Password string
@@ -92,6 +93,42 @@ Need the current 6-digit 2FA code? It's built in (RFC 6238):
 ```go
 code, err := p.TOTPCode(time.Now()) // "773933"
 ```
+
+One login can cover several sites, `Domains` lists them all (Apple lets you link,
+say, `tim.it` and `timvision.it` to one entry). Apple stores no icons, so
+`p.IconURL()` returns a favicon URL via DuckDuckGo's icon service
+(`https://icons.duckduckgo.com/ip3/<domain>.ico`), reliable where a site's own
+`/favicon.ico` 404s. The domain is sent to DuckDuckGo when you fetch it.
+
+### Polling for new passwords
+
+Escrow recovery is a rate-limited HSM call, so don't repeat it in a loop. Open the
+vault once, then poll `WebPasswords`, each poll re-fetches CloudKit with no escrow
+call and reflects entries added on the account's other devices:
+
+```go
+pv, _ := client.OpenPasswords(passcode) // escrow runs once here
+for {
+	pws, _ := pv.WebPasswords()          // cheap, CloudKit fetch only
+	// … diff, notify …
+	time.Sleep(30 * time.Minute)
+}
+```
+
+### Multiple devices
+
+On accounts with several trusted devices more than one recovery bottle can be
+viable, each needing its own device's passcode. List them (a free call, no escrow
+or passcode) and pick one:
+
+```go
+refs, _ := client.ViableBottles()
+// show refs[i].Device (Model, Name, Serial, Build) and let the user choose
+pv, _ := client.OpenPasswordsWith(refs[i], passcode)
+```
+
+The single-device case needs none of this, `WebPasswords` / `OpenPasswords` just
+use the sole bottle.
 
 ## The Store (required)
 
