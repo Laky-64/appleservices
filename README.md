@@ -154,6 +154,21 @@ the account's trust circle, i.e. the device was removed, so fall back to
 > is the same as storing every password in plaintext. Put it in the OS credential
 > store (DPAPI / Keychain / libsecret) or encrypt it under a local user unlock.
 
+### Profile
+
+`client.Profile()` returns the account holder's display name and profile photo
+(the me-card contact photo, the same image the iCloud client shows) in one call,
+no escrow or passcode needed:
+
+```go
+p, _ := client.Profile()
+fmt.Println(p.Name)                    // "Steve Wozniak"
+os.WriteFile("me.jpg", p.Photo, 0o600) // p.Photo is nil when no photo is set
+```
+
+Only the photo bytes are exposed, not the underlying URL: fetching it needs the
+account's MobileMe auth + anisette headers, which a caller cannot reproduce.
+
 ## The Store (required)
 
 The library never touches disk itself, you decide where its two pieces of state

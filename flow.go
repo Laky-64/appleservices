@@ -431,6 +431,29 @@ func (c *Client) OpenPasswordsWithPeer(pk PeerKey) (*PasswordVault, error) {
 	return &PasswordVault{v: v}, nil
 }
 
+type Profile struct {
+	Name      string
+	Photo     []byte
+	PhotoType string
+}
+
+func (c *Client) Profile() (Profile, error) {
+	anis, err := c.anisette.Headers()
+	if err != nil {
+		return Profile{}, fmt.Errorf("appleservices: anisette headers: %w", err)
+	}
+	bag, err := icloud.FetchAccountBag(c.mme, c.dsid, anis)
+	if err != nil {
+		return Profile{}, err
+	}
+	name := icloud.AccountFullName(bag)
+	photo, ptype, err := icloud.ProfilePhoto(icloud.ContactsDAVURL(bag), name, c.mme, c.dsid, anis)
+	if err != nil {
+		return Profile{}, err
+	}
+	return Profile{Name: name, Photo: photo, PhotoType: ptype}, nil
+}
+
 func (c *Client) WebPasswords(passcode string) ([]keychain.WebPassword, error) {
 	pv, err := c.OpenPasswords(passcode)
 	if err != nil {
