@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -62,7 +63,33 @@ func run() error {
 		return fmt.Errorf("client: %w", err)
 	}
 
-	pws, err := client.WebPasswords(*passcode)
+	refs, err := client.ViableBottles()
+	if err != nil {
+		return fmt.Errorf("viable bottles: %w", err)
+	}
+	if len(refs) == 0 {
+		return fmt.Errorf("no recoverable bottles for this account")
+	}
+	chosen := refs[0]
+	if len(refs) > 1 {
+		fmt.Fprintln(os.Stderr, "Multiple recoverable devices — the passcode must belong to the one you pick:")
+		for i, r := range refs {
+			fmt.Fprintf(os.Stderr, "  [%d] %s %s (serial %s, build %s)\n", i, r.Device.Model, r.Device.Name, r.Device.Serial, r.Device.Build)
+		}
+		idx, err := promptIndex(len(refs))
+		if err != nil {
+			return err
+		}
+		chosen = refs[idx]
+	}
+	fmt.Fprintf(os.Stderr, "Recovering via device: %s %s (serial %s, build %s)\n",
+		chosen.Device.Model, chosen.Device.Name, chosen.Device.Serial, chosen.Device.Build)
+
+	pv, err := client.OpenPasswordsWith(chosen, *passcode)
+	if err != nil {
+		return fmt.Errorf("open passwords: %w", err)
+	}
+	pws, err := pv.WebPasswords()
 	if err != nil {
 		return fmt.Errorf("web passwords: %w", err)
 	}
@@ -79,6 +106,19 @@ func run() error {
 		fmt.Println()
 	}
 	return nil
+}
+
+func promptIndex(n int) (int, error) {
+	fmt.Fprintf(os.Stderr, "Enter device number [0-%d]: ", n-1)
+	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil {
+		return 0, fmt.Errorf("read selection: %w", err)
+	}
+	idx, err := strconv.Atoi(strings.TrimSpace(line))
+	if err != nil || idx < 0 || idx >= n {
+		return 0, fmt.Errorf("invalid selection %q", strings.TrimSpace(line))
+	}
+	return idx, nil
 }
 
 func promptCode() (string, error) {

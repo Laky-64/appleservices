@@ -33,7 +33,7 @@ func NewClient(escrowURL string, anisette map[string]string) *Client {
 	return &Client{escrowURL: strings.TrimSuffix(escrowURL, ":443"), anisette: anisette}
 }
 
-func (c *Client) Recover(appleID, accountPassword, pet, dsid, passcode, bottleID string) ([]byte, error) {
+func (c *Client) Recover(appleID, accountPassword, pet, dsid, passcode, bottleID, escrowLabel string) ([]byte, error) {
 	recBody := plistBody(
 		`<key>version</key><integer>` + escrowVersion + `</integer>` +
 			`<key>command</key><string>GETRECORDS</string>` +
@@ -45,7 +45,7 @@ func (c *Client) Recover(appleID, accountPassword, pet, dsid, passcode, bottleID
 	if status != 200 {
 		return nil, fmt.Errorf("escrow: get_records status %d (errorCode=%s)", status, escrowErrCode(rb))
 	}
-	label, err := selectRecordLabel(rb, bottleID)
+	label, err := selectRecordLabel(rb, bottleID, escrowLabel)
 	if err != nil {
 		return nil, err
 	}
@@ -164,7 +164,7 @@ func decodeRecoverPayload(recResp, sessionKey []byte, passcode string) ([]byte, 
 	return ent, nil
 }
 
-func selectRecordLabel(rb []byte, bottleID string) (string, error) {
+func selectRecordLabel(rb []byte, bottleID, escrowLabel string) (string, error) {
 	var doc map[string]any
 	if _, err := plist.Unmarshal(rb, &doc); err != nil {
 		return "", fmt.Errorf("escrow: decode get_records: %w", err)
@@ -178,25 +178,24 @@ func selectRecordLabel(rb []byte, bottleID string) (string, error) {
 			continue
 		}
 		icdp = append(icdp, label)
+		if escrowLabel != "" && label == escrowLabel {
+			return label, nil
+		}
 		if bottleID != "" && recordMatchesBottle(rec, bottleID) {
 			return label, nil
 		}
 	}
-	if bottleID == "" {
-		switch len(icdp) {
-		case 0:
-			return "", errors.New("escrow: no com.apple.icdp.record.* record in get_records")
-		default:
-			return icdp[0], nil
-		}
-	}
 	if len(icdp) == 1 {
+
 		return icdp[0], nil
 	}
 	if len(icdp) == 0 {
 		return "", errors.New("escrow: no com.apple.icdp.record.* record in get_records")
 	}
-	return "", fmt.Errorf("escrow: no icdp record matched bottleID among %d records", len(icdp))
+	if bottleID == "" && escrowLabel == "" {
+		return icdp[0], nil
+	}
+	return "", fmt.Errorf("escrow: no icdp record matched bottleID/label among %d records", len(icdp))
 }
 
 func recordMatchesBottle(rec map[string]any, bottleID string) bool {

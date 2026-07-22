@@ -26,6 +26,16 @@ type Bottle struct {
 	SignatureUsingPeerKey   []byte
 	PeerID                  string
 	BottleID                string
+	EscrowRecordLabel       string
+	Device                  BottleDevice
+}
+
+type BottleDevice struct {
+	Name   string
+	Model  string
+	Class  string
+	Serial string
+	Build  string
 }
 
 func MarshalBottle(v Bottle) []byte {
@@ -84,13 +94,13 @@ func UnmarshalViableBottlesResponse(data []byte) (ViableBottles, error) {
 		}
 		switch f.Number {
 		case 1:
-			b, err := UnmarshalBottle(f.Bytes)
+			b, err := extractBottle(f.Bytes)
 			if err != nil {
 				return ViableBottles{}, err
 			}
 			vb.Viable = append(vb.Viable, b)
 		case 2:
-			b, err := UnmarshalBottle(f.Bytes)
+			b, err := extractBottle(f.Bytes)
 			if err != nil {
 				return ViableBottles{}, err
 			}
@@ -98,4 +108,75 @@ func UnmarshalViableBottlesResponse(data []byte) (ViableBottles, error) {
 		}
 	}
 	return vb, nil
+}
+
+func extractBottle(blob []byte) (Bottle, error) {
+	fields, err := protobuf.ReadFields(blob)
+	if err != nil {
+		return Bottle{}, fmt.Errorf("octagon: decode bottle entry: %w", err)
+	}
+	var (
+		hasBottleID bool
+		label       string
+		inner       []byte
+	)
+	for _, f := range fields {
+		switch f.Number {
+		case 7:
+			hasBottleID = true
+		case 1:
+			if f.WireType == protobuf.WireBytes {
+				label = string(f.Bytes)
+			}
+		case 2:
+			if f.WireType == protobuf.WireBytes {
+				inner = f.Bytes
+			}
+		}
+	}
+	if hasBottleID {
+		return UnmarshalBottle(blob)
+	}
+	if inner == nil {
+		return Bottle{}, fmt.Errorf("octagon: bottle entry has neither a BottleID nor a nested bottle")
+	}
+	b, err := UnmarshalBottle(inner)
+	if err != nil {
+		return Bottle{}, err
+	}
+	b.EscrowRecordLabel = label
+	b.Device = parseBottleDevice(blob)
+	return b, nil
+}
+
+func parseBottleDevice(wrapper []byte) BottleDevice {
+	var d BottleDevice
+	meta := subField(subField(wrapper, 4), 3)
+	if meta == nil {
+		return d
+	}
+	d.Serial = string(subField(meta, 8))
+	d.Build = string(subField(meta, 9))
+	if client := subField(meta, 2); client != nil {
+		d.Model = string(subField(client, 8))
+		d.Class = string(subField(client, 9))
+		d.Name = string(subField(client, 11))
+	}
+	return d
+}
+
+func subField(data []byte, num int) []byte {
+	if data == nil {
+		return nil
+	}
+	fields, err := protobuf.ReadFields(data)
+	if err != nil {
+		return nil
+	}
+	for _, f := range fields {
+		if f.Number == num && f.WireType == protobuf.WireBytes {
+			return f.Bytes
+		}
+	}
+	return nil
 }

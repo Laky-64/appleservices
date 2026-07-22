@@ -39,12 +39,11 @@ func defaultBackend(anis gsa.AnisetteProvider, sess *gsa.Session) loginBackend {
 }
 
 type Login struct {
-	creds    Credentials
-	store    Store
-	backend  loginBackend
-	anisette gsa.AnisetteProvider
-	stateful *anisette.Provider
-
+	creds          Credentials
+	store          Store
+	backend        loginBackend
+	anisette       gsa.AnisetteProvider
+	stateful       *anisette.Provider
 	needsTwoFactor bool
 	result         *gsa.LoginResult
 	adsid          string
@@ -299,15 +298,37 @@ type Client struct {
 }
 
 func (c *Client) Vault(passcode string) (*ckks.Vault, error) {
+	refs, err := c.ViableBottles()
+	if err != nil {
+		return nil, err
+	}
+	if len(refs) == 0 {
+		return nil, errors.New("appleservices: no viable bottles for this account")
+	}
+	return c.openVaultWith(refs[0].bottle, passcode)
+}
+
+type BottleDevice = octagon.BottleDevice
+
+type BottleRef struct {
+	Device BottleDevice
+	bottle octagon.Bottle
+}
+
+func (c *Client) ViableBottles() ([]BottleRef, error) {
 	vb, err := octagon.FetchViableBottles(c.ck)
 	if err != nil {
 		return nil, fmt.Errorf("appleservices: fetch viable bottles: %w", err)
 	}
-	bottles := append(append([]octagon.Bottle{}, vb.Viable...), vb.Partial...)
-	if len(bottles) == 0 {
-		return nil, errors.New("appleservices: no viable bottles for this account")
+	all := append(append([]octagon.Bottle{}, vb.Viable...), vb.Partial...)
+	refs := make([]BottleRef, 0, len(all))
+	for _, b := range all {
+		refs = append(refs, BottleRef{Device: b.Device, bottle: b})
 	}
+	return refs, nil
+}
 
+func (c *Client) openVaultWith(bottle octagon.Bottle, passcode string) (*ckks.Vault, error) {
 	pet, adsid, err := c.mintPET()
 	if err != nil {
 		return nil, fmt.Errorf("appleservices: mint escrow PET: %w", err)
@@ -330,53 +351,59 @@ func (c *Client) Vault(passcode string) (*ckks.Vault, error) {
 	}
 	esc := escrow.NewClient(escrowURL, escrowAnis)
 
-	entropy, err := esc.Recover(c.appleID, c.password, pet, c.dsid, passcode, bottles[0].BottleID)
+	entropy, err := esc.Recover(c.appleID, c.password, pet, c.dsid, passcode, bottle.BottleID, bottle.EscrowRecordLabel)
 	if err != nil {
 		return nil, fmt.Errorf("appleservices: escrow recover: %w", err)
 	}
 
-	var lastErr error
-	for _, b := range bottles {
-		otBottle := otBottleContents(b.Contents)
-		_, enc, err := octagon.DecryptBottle(entropy, adsid, otBottle)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		peerID := sponsorPeerID(otBottle)
-		if peerID == "" {
-			lastErr = errors.New("appleservices: decrypted bottle has no sponsor peerID")
-			continue
-		}
-		return ckks.OpenVault(c.ck, enc, peerID), nil
+	_, enc, err := octagon.DecryptBottle(entropy, adsid, bottle.Contents)
+	if err != nil {
+		return nil, fmt.Errorf("appleservices: decrypt bottle: %w", err)
 	}
-	if lastErr == nil {
-		lastErr = errors.New("no bottle decrypted with the recovered entropy")
+	peerID := bottle.PeerID
+	if peerID == "" {
+		peerID = sponsorPeerID(bottle.Contents)
 	}
-	return nil, fmt.Errorf("appleservices: open vault: %w", lastErr)
+	if peerID == "" {
+		return nil, errors.New("appleservices: decrypted bottle has no sponsor peerID")
+	}
+	return ckks.OpenVault(c.ck, enc, peerID), nil
 }
 
 func (c *Client) WebPasswords(passcode string) ([]keychain.WebPassword, error) {
+	pv, err := c.OpenPasswords(passcode)
+	if err != nil {
+		return nil, err
+	}
+	return pv.WebPasswords()
+}
+
+type PasswordVault struct {
+	v *ckks.Vault
+}
+
+func (c *Client) OpenPasswords(passcode string) (*PasswordVault, error) {
 	v, err := c.Vault(passcode)
 	if err != nil {
 		return nil, err
 	}
-	items, err := v.Items("Passwords")
+	return &PasswordVault{v: v}, nil
+}
+
+func (c *Client) OpenPasswordsWith(ref BottleRef, passcode string) (*PasswordVault, error) {
+	v, err := c.openVaultWith(ref.bottle, passcode)
+	if err != nil {
+		return nil, err
+	}
+	return &PasswordVault{v: v}, nil
+}
+
+func (pv *PasswordVault) WebPasswords() ([]keychain.WebPassword, error) {
+	items, err := pv.v.Items("Passwords")
 	if err != nil {
 		return nil, fmt.Errorf("appleservices: fetch Passwords view: %w", err)
 	}
 	return keychain.WebPasswords(items), nil
-}
-
-func otBottleContents(wrapper []byte) []byte {
-	if fs, err := protobuf.ReadFields(wrapper); err == nil {
-		for _, f := range fs {
-			if f.Number == 2 && f.WireType == protobuf.WireBytes {
-				return f.Bytes
-			}
-		}
-	}
-	return wrapper
 }
 
 func sponsorPeerID(otBottle []byte) string {
