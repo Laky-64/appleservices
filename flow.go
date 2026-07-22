@@ -1,7 +1,9 @@
 package appleservices
 
 import (
+	"crypto/ecdsa"
 	"crypto/sha256"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"os"
@@ -329,9 +331,17 @@ func (c *Client) ViableBottles() ([]BottleRef, error) {
 }
 
 func (c *Client) openVaultWith(bottle octagon.Bottle, passcode string) (*ckks.Vault, error) {
+	enc, peerID, err := c.recoverPeer(bottle, passcode)
+	if err != nil {
+		return nil, err
+	}
+	return ckks.OpenVault(c.ck, enc, peerID), nil
+}
+
+func (c *Client) recoverPeer(bottle octagon.Bottle, passcode string) (*ecdsa.PrivateKey, string, error) {
 	pet, adsid, err := c.mintPET()
 	if err != nil {
-		return nil, fmt.Errorf("appleservices: mint escrow PET: %w", err)
+		return nil, "", fmt.Errorf("appleservices: mint escrow PET: %w", err)
 	}
 	if adsid == "" {
 		adsid = c.altDSID
@@ -339,35 +349,86 @@ func (c *Client) openVaultWith(bottle octagon.Bottle, passcode string) (*ckks.Va
 
 	discoverAnis, err := c.anisette.Headers()
 	if err != nil {
-		return nil, fmt.Errorf("appleservices: anisette headers: %w", err)
+		return nil, "", fmt.Errorf("appleservices: anisette headers: %w", err)
 	}
 	escrowURL, err := escrow.DiscoverURL(c.mme, c.dsid, discoverAnis)
 	if err != nil {
-		return nil, fmt.Errorf("appleservices: discover escrow url: %w", err)
+		return nil, "", fmt.Errorf("appleservices: discover escrow url: %w", err)
 	}
 	escrowAnis, err := c.anisette.Headers()
 	if err != nil {
-		return nil, fmt.Errorf("appleservices: anisette headers: %w", err)
+		return nil, "", fmt.Errorf("appleservices: anisette headers: %w", err)
 	}
 	esc := escrow.NewClient(escrowURL, escrowAnis)
 
 	entropy, err := esc.Recover(c.appleID, c.password, pet, c.dsid, passcode, bottle.BottleID, bottle.EscrowRecordLabel)
 	if err != nil {
-		return nil, fmt.Errorf("appleservices: escrow recover: %w", err)
+		return nil, "", fmt.Errorf("appleservices: escrow recover: %w", err)
 	}
 
 	_, enc, err := octagon.DecryptBottle(entropy, adsid, bottle.Contents)
 	if err != nil {
-		return nil, fmt.Errorf("appleservices: decrypt bottle: %w", err)
+		return nil, "", fmt.Errorf("appleservices: decrypt bottle: %w", err)
 	}
 	peerID := bottle.PeerID
 	if peerID == "" {
 		peerID = sponsorPeerID(bottle.Contents)
 	}
 	if peerID == "" {
-		return nil, errors.New("appleservices: decrypted bottle has no sponsor peerID")
+		return nil, "", errors.New("appleservices: decrypted bottle has no sponsor peerID")
 	}
-	return ckks.OpenVault(c.ck, enc, peerID), nil
+	return enc, peerID, nil
+}
+
+type PeerKey struct {
+	PeerID     string
+	PrivateKey []byte
+}
+
+func (c *Client) RecoverPeer(passcode string) (PeerKey, error) {
+	refs, err := c.ViableBottles()
+	if err != nil {
+		return PeerKey{}, err
+	}
+	if len(refs) == 0 {
+		return PeerKey{}, errors.New("appleservices: no viable bottles for this account")
+	}
+	return c.RecoverPeerWith(refs[0], passcode)
+}
+
+func (c *Client) RecoverPeerWith(ref BottleRef, passcode string) (PeerKey, error) {
+	enc, peerID, err := c.recoverPeer(ref.bottle, passcode)
+	if err != nil {
+		return PeerKey{}, err
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(enc)
+	if err != nil {
+		return PeerKey{}, fmt.Errorf("appleservices: marshal peer key: %w", err)
+	}
+	return PeerKey{PeerID: peerID, PrivateKey: der}, nil
+}
+
+func (c *Client) VaultWithPeer(pk PeerKey) (*ckks.Vault, error) {
+	if pk.PeerID == "" {
+		return nil, errors.New("appleservices: peer key has no PeerID")
+	}
+	key, err := x509.ParsePKCS8PrivateKey(pk.PrivateKey)
+	if err != nil {
+		return nil, fmt.Errorf("appleservices: parse peer key: %w", err)
+	}
+	enc, ok := key.(*ecdsa.PrivateKey)
+	if !ok {
+		return nil, fmt.Errorf("appleservices: peer key is %T, want an ECDSA private key", key)
+	}
+	return ckks.OpenVault(c.ck, enc, pk.PeerID), nil
+}
+
+func (c *Client) OpenPasswordsWithPeer(pk PeerKey) (*PasswordVault, error) {
+	v, err := c.VaultWithPeer(pk)
+	if err != nil {
+		return nil, err
+	}
+	return &PasswordVault{v: v}, nil
 }
 
 func (c *Client) WebPasswords(passcode string) ([]keychain.WebPassword, error) {

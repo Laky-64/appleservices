@@ -130,6 +130,30 @@ pv, _ := client.OpenPasswordsWith(refs[i], passcode)
 The single-device case needs none of this, `WebPasswords` / `OpenPasswords` just
 use the sole bottle.
 
+### Skipping escrow on later runs
+
+Escrow recovery yields a **sponsor peer key**, the P-384 key the vault is
+actually opened with. Cache it and later runs skip escrow and the passcode
+entirely:
+
+```go
+peer, _ := client.RecoverPeer(passcode) // once, the escrow round-trip
+save(peer)                              // PeerKey{PeerID, PrivateKey}, encrypt it!
+
+// every run after that:
+pv, _ := client.OpenPasswordsWithPeer(load()) // no escrow, no passcode
+```
+
+The key stays valid across TLK rotations (the zone key is re-unwrapped from a
+freshly fetched TLKShare each time). It stops working only when that peer leaves
+the account's trust circle, i.e. the device was removed, so fall back to
+`RecoverPeer` when `OpenPasswordsWithPeer` fails.
+
+> 🔑 **A PeerKey is a master key.** It decrypts the whole keychain, forever,
+> without the Apple ID password or the device passcode. Storing it in plaintext
+> is the same as storing every password in plaintext. Put it in the OS credential
+> store (DPAPI / Keychain / libsecret) or encrypt it under a local user unlock.
+
 ## The Store (required)
 
 The library never touches disk itself, you decide where its two pieces of state
