@@ -85,7 +85,7 @@ func run() error {
 	fmt.Fprintf(os.Stderr, "Recovering via device: %s %s (serial %s, build %s)\n",
 		chosen.Device.Model, chosen.Device.Name, chosen.Device.Serial, chosen.Device.Build)
 
-	kc, err := client.OpenKeychainWith(chosen, *passcode)
+	kc, err := client.OpenKeychain(chosen, *passcode)
 	if err != nil {
 		return fmt.Errorf("open keychain: %w", err)
 	}

@@ -299,17 +299,6 @@ type Client struct {
 	mintPET  func() (pet, adsid string, err error)
 }
 
-func (c *Client) Vault(passcode string) (*ckks.Vault, error) {
-	refs, err := c.ViableBottles()
-	if err != nil {
-		return nil, err
-	}
-	if len(refs) == 0 {
-		return nil, errors.New("appleservices: no viable bottles for this account")
-	}
-	return c.openVaultWith(refs[0].bottle, passcode)
-}
-
 type BottleDevice = octagon.BottleDevice
 
 type BottleRef struct {
@@ -385,18 +374,7 @@ type PeerKey struct {
 	PrivateKey []byte
 }
 
-func (c *Client) RecoverPeer(passcode string) (PeerKey, error) {
-	refs, err := c.ViableBottles()
-	if err != nil {
-		return PeerKey{}, err
-	}
-	if len(refs) == 0 {
-		return PeerKey{}, errors.New("appleservices: no viable bottles for this account")
-	}
-	return c.RecoverPeerWith(refs[0], passcode)
-}
-
-func (c *Client) RecoverPeerWith(ref BottleRef, passcode string) (PeerKey, error) {
+func (c *Client) RecoverPeer(ref BottleRef, passcode string) (PeerKey, error) {
 	enc, peerID, err := c.recoverPeer(ref.bottle, passcode)
 	if err != nil {
 		return PeerKey{}, err
@@ -408,7 +386,7 @@ func (c *Client) RecoverPeerWith(ref BottleRef, passcode string) (PeerKey, error
 	return PeerKey{PeerID: peerID, PrivateKey: der}, nil
 }
 
-func (c *Client) VaultWithPeer(pk PeerKey) (*ckks.Vault, error) {
+func (c *Client) OpenKeychainWithPeer(pk PeerKey) (*KeychainVault, error) {
 	if pk.PeerID == "" {
 		return nil, errors.New("appleservices: peer key has no PeerID")
 	}
@@ -420,15 +398,7 @@ func (c *Client) VaultWithPeer(pk PeerKey) (*ckks.Vault, error) {
 	if !ok {
 		return nil, fmt.Errorf("appleservices: peer key is %T, want an ECDSA private key", key)
 	}
-	return ckks.OpenVault(c.ck, enc, pk.PeerID), nil
-}
-
-func (c *Client) OpenKeychainWithPeer(pk PeerKey) (*KeychainVault, error) {
-	v, err := c.VaultWithPeer(pk)
-	if err != nil {
-		return nil, err
-	}
-	return &KeychainVault{v: v}, nil
+	return &KeychainVault{v: ckks.OpenVault(c.ck, enc, pk.PeerID)}, nil
 }
 
 type Profile struct {
@@ -454,27 +424,11 @@ func (c *Client) Profile() (Profile, error) {
 	return Profile{Name: name, Photo: photo, PhotoType: ptype}, nil
 }
 
-func (c *Client) WebPasswords(passcode string) ([]keychain.WebPassword, error) {
-	pv, err := c.OpenKeychain(passcode)
-	if err != nil {
-		return nil, err
-	}
-	return pv.WebPasswords()
-}
-
 type KeychainVault struct {
 	v *ckks.Vault
 }
 
-func (c *Client) OpenKeychain(passcode string) (*KeychainVault, error) {
-	v, err := c.Vault(passcode)
-	if err != nil {
-		return nil, err
-	}
-	return &KeychainVault{v: v}, nil
-}
-
-func (c *Client) OpenKeychainWith(ref BottleRef, passcode string) (*KeychainVault, error) {
+func (c *Client) OpenKeychain(ref BottleRef, passcode string) (*KeychainVault, error) {
 	v, err := c.openVaultWith(ref.bottle, passcode)
 	if err != nil {
 		return nil, err
