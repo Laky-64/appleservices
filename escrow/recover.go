@@ -13,6 +13,7 @@ import (
 	"github.com/Laky-64/http"
 	"howett.net/plist"
 
+	"github.com/Laky-64/appleservices/internal/httpx"
 	"github.com/Laky-64/appleservices/internal/srp"
 )
 
@@ -217,21 +218,13 @@ func recordMatchesBottle(rec map[string]any, bottleID string) bool {
 
 func (c *Client) escrowPost(endpoint, scheme, user, pass string, body []byte) ([]byte, int, error) {
 	headers := map[string]string{
-		"Authorization":     scheme + " " + base64.StdEncoding.EncodeToString([]byte(user+":"+pass)),
+		"Authorization":     httpx.Authorization(scheme, user, pass),
 		"Content-Type":      "application/x-apple-plist",
 		"Accept":            "*/*",
 		"User-Agent":        "com.apple.cloudservices 1.0",
 		"X-Mme-Client-Info": c.anisette["X-Mme-Client-Info"],
 	}
-	for k, v := range c.anisette {
-		if v == "" {
-			continue
-		}
-		lk := strings.ToLower(k)
-		if strings.HasPrefix(lk, "x-apple-i-") || lk == "x-mme-device-id" {
-			headers[k] = v
-		}
-	}
+	httpx.ApplyAnisette(headers, c.anisette)
 	result, err := http.ExecuteRequest(c.escrowURL+"/escrowproxy/api/"+endpoint,
 		http.Method("POST"),
 		http.Body(body),
@@ -246,20 +239,12 @@ func (c *Client) escrowPost(endpoint, scheme, user, pass string, body []byte) ([
 
 func DiscoverURL(mmeToken, dsid string, anisette map[string]string) (string, error) {
 	headers := map[string]string{
-		"Authorization":     "Basic " + base64.StdEncoding.EncodeToString([]byte(dsid+":"+mmeToken)),
+		"Authorization":     httpx.BasicAuth(dsid, mmeToken),
 		"Accept":            "*/*",
-		"User-Agent":        "com.apple.iCloudHelper/282 CFNetwork/1494.0.7 Darwin/23.4.0",
+		"User-Agent":        httpx.ICloudHelperUA,
 		"X-Mme-Client-Info": anisette["X-Mme-Client-Info"],
 	}
-	for k, v := range anisette {
-		if v == "" {
-			continue
-		}
-		lk := strings.ToLower(k)
-		if strings.HasPrefix(lk, "x-apple-i-") || lk == "x-mme-device-id" {
-			headers[k] = v
-		}
-	}
+	httpx.ApplyAnisette(headers, anisette)
 	result, err := http.ExecuteRequest(setupBaseURL+"/setup/get_account_settings",
 		http.Method("GET"),
 		http.Headers(headers),

@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Laky-64/appleservices/internal/uuid"
 	"howett.net/plist"
 )
 
@@ -79,7 +80,7 @@ func WebPasswords(items []Item) []WebPassword {
 		if it.Class != "inet" || it.Agrp != "com.apple.cfnetwork" {
 			continue
 		}
-		website := !isUUID(it.Srvr)
+		website := !uuid.IsCanonical(it.Srvr)
 		wp := WebPassword{
 			Name:     title(it.Srvr),
 			Domain:   it.Srvr,
@@ -191,22 +192,3 @@ func totpURL(v any) string {
 	return asString(m["originalURL"])
 }
 
-func isUUID(s string) bool {
-	if len(s) != 36 {
-		return false
-	}
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if i == 8 || i == 13 || i == 18 || i == 23 {
-			if c != '-' {
-				return false
-			}
-			continue
-		}
-		isHex := (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
-		if !isHex {
-			return false
-		}
-	}
-	return true
-}

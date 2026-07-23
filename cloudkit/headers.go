@@ -1,8 +1,7 @@
 package cloudkit
 
 import (
-	"encoding/base64"
-
+	"github.com/Laky-64/appleservices/internal/httpx"
 	"github.com/Laky-64/appleservices/internal/uuid"
 )
 
@@ -34,6 +33,6 @@ func buildHeaders(auth Auth, userID string) map[string]string {
 		h["X-CloudKit-UserId"] = userID
 	}
 
-	h["Authorization"] = "Basic " + base64.StdEncoding.EncodeToString([]byte(auth.DSID+":"+auth.MMEAuthToken))
+	h["Authorization"] = httpx.BasicAuth(auth.DSID, auth.MMEAuthToken)
 	return h
 }

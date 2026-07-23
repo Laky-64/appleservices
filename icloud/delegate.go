@@ -2,12 +2,12 @@ package icloud
 
 import (
 	"bytes"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"strconv"
 	"time"
 
+	"github.com/Laky-64/appleservices/internal/httpx"
 	"github.com/Laky-64/appleservices/internal/uuid"
 	"github.com/Laky-64/http"
 	"howett.net/plist"
@@ -39,7 +39,7 @@ func FetchDelegateTokens(anisetteHeaders map[string]string, username, adsid, pet
 		"X-Apple-ADSID":     adsid,
 		"User-Agent":        "com.apple.iCloudHelper/282 CFNetwork/1408.0.4 Darwin/22.5.0",
 		"X-Mme-Client-Info": "<MacBookPro18,3> <Mac OS X;13.4.1;22F8> <com.apple.AOSKit/282 (com.apple.accountsd/113)>",
-		"Authorization":     "Basic " + base64.StdEncoding.EncodeToString([]byte(username+":"+pet)),
+		"Authorization":     httpx.BasicAuth(username, pet),
 	}
 	for k, v := range anisetteHeaders {
 		headers[k] = v

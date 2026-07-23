@@ -1,31 +1,24 @@
 package icloud
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/Laky-64/appleservices/internal/httpx"
+	"github.com/Laky-64/appleservices/internal/uuid"
 	"github.com/Laky-64/http"
 	"howett.net/plist"
 )
 
 func mmeAuthHeaders(mmeToken, dsid string, anisette map[string]string) map[string]string {
 	headers := map[string]string{
-		"Authorization":     "Basic " + base64.StdEncoding.EncodeToString([]byte(dsid+":"+mmeToken)),
-		"User-Agent":        "com.apple.iCloudHelper/282 CFNetwork/1494.0.7 Darwin/23.4.0",
+		"Authorization":     httpx.BasicAuth(dsid, mmeToken),
+		"User-Agent":        httpx.ICloudHelperUA,
 		"X-Mme-Client-Info": anisette["X-Mme-Client-Info"],
 	}
-	for k, v := range anisette {
-		if v == "" {
-			continue
-		}
-		lk := strings.ToLower(k)
-		if strings.HasPrefix(lk, "x-apple-i-") || lk == "x-mme-device-id" {
-			headers[k] = v
-		}
-	}
+	httpx.ApplyAnisette(headers, anisette)
 	return headers
 }
 
@@ -122,7 +115,7 @@ func ProfilePhoto(contactsDAVURL, accountFullName, mmeToken, dsid string, aniset
 	if pr == nil || len(pr.Body) == 0 {
 		return nil, "", fmt.Errorf("icloud: me-card photo: empty response")
 	}
-	return pr.Body, firstHeader(pr.Headers, "Content-Type"), nil
+	return pr.Body, httpx.FirstHeader(pr.Headers, "Content-Type"), nil
 }
 
 func meCardPhotoURL(ab addressBook, accountFullName string) string {
@@ -134,7 +127,7 @@ func meCardPhotoURL(ab addressBook, accountFullName string) string {
 		if ct.ContactID == ab.MeCardID && ab.MeCardID != "" {
 			return ct.Photo.URL
 		}
-		if !isPlainUUID(ct.ContactID) {
+		if !uuid.IsCanonical(ct.ContactID) {
 			return ct.Photo.URL
 		}
 		if accountFullName != "" && strings.EqualFold(strings.TrimSpace(ct.FirstName+" "+ct.LastName), accountFullName) {
@@ -144,30 +137,3 @@ func meCardPhotoURL(ab addressBook, accountFullName string) string {
 	return nameMatch
 }
 
-func isPlainUUID(s string) bool {
-	if len(s) != 36 {
-		return false
-	}
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if i == 8 || i == 13 || i == 18 || i == 23 {
-			if c != '-' {
-				return false
-			}
-			continue
-		}
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
-			return false
-		}
-	}
-	return true
-}
-
-func firstHeader(h map[string][]string, name string) string {
-	for k, v := range h {
-		if strings.EqualFold(k, name) && len(v) > 0 {
-			return v[0]
-		}
-	}
-	return ""
-}

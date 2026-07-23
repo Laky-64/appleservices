@@ -5,9 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"strings"
 	"time"
 
+	"github.com/Laky-64/appleservices/internal/httpx"
 	"github.com/Laky-64/http"
 )
 
@@ -45,17 +45,8 @@ func AppInit(auth Auth) (AppConfig, error) {
 	if body.CloudKitDatabaseURL != "" {
 		return AppConfig{DatabaseURL: body.CloudKitDatabaseURL, UserID: body.CloudKitUserID}, nil
 	}
-	if part := firstHeader(result.Headers, "X-Apple-User-Partition"); part != "" {
+	if part := httpx.FirstHeader(result.Headers, "X-Apple-User-Partition"); part != "" {
 		return AppConfig{DatabaseURL: "https://p" + part + "-ckdatabase.icloud.com", UserID: body.CloudKitUserID}, nil
 	}
 	return AppConfig{}, errors.New("cloudkit: ckAppInit gave neither cloudKitDatabaseUrl nor X-Apple-User-Partition")
-}
-
-func firstHeader(h map[string][]string, name string) string {
-	for k, v := range h {
-		if strings.EqualFold(k, name) && len(v) > 0 {
-			return v[0]
-		}
-	}
-	return ""
 }
