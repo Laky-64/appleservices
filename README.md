@@ -5,9 +5,11 @@ Apple ID, joins the account's trust circle, and **decrypts your synced Passwords
 in clear text**, no Apple device, no Wine, no browser automation.
 
 ```go
-login, _  := appleservices.BeginLogin(creds, store) // sign in (handle 2FA once)
+login, _  := appleservices.BeginLogin(creds, store)  // sign in (handle 2FA once)
 client, _ := login.Client()
-pws, _    := client.WebPasswords(passcode)          // decrypt
+refs, _   := client.ViableBottles()                  // recoverable devices, pick one
+kc, _     := client.OpenKeychain(refs[0], passcode)  // recover with its device passcode
+pws, _    := kc.WebPasswords()                        // decrypt
 for _, p := range pws {
     fmt.Println(p.Name, p.Domain, p.Username, p.Password, p.TOTP)
 }
@@ -60,7 +62,9 @@ func main() {
 
 	client, _ := login.Client()
 
-	pws, _ := client.WebPasswords("123456") // your device passcode
+	refs, _ := client.ViableBottles()               // recoverable devices, pick one
+	kc, _ := client.OpenKeychain(refs[0], "123456") // "123456" = that device's passcode
+	pws, _ := kc.WebPasswords()
 	for _, p := range pws {
 		fmt.Printf("%-20s %-25s %s\n", p.Name, p.Username, p.Password)
 	}
@@ -100,6 +104,29 @@ say, `tim.it` and `timvision.it` to one entry). Apple stores no icons, so
 (`https://icons.duckduckgo.com/ip3/<domain>.ico`), reliable where a site's own
 `/favicon.ico` 404s. The domain is sent to DuckDuckGo when you fetch it.
 
+### Wi-Fi passwords
+
+The Wi-Fi networks your devices join sync in their own CKKS zone, recovered
+through the same vault, one `OpenKeychain` gives you both web and Wi-Fi logins
+with a single escrow recovery:
+
+```go
+kc, _ := client.OpenKeychain(refs[0], passcode)
+wifis, _ := kc.WiFiPasswords()
+for _, w := range wifis {
+	fmt.Println(w.SSID, w.Password) // network name + WPA passphrase
+}
+```
+
+```go
+type WiFiPassword struct {
+	SSID     string    // network name
+	Password string    // WPA passphrase
+	Created  time.Time
+	Modified time.Time
+}
+```
+
 ### Polling for new passwords
 
 Escrow recovery is a rate-limited HSM call, so don't repeat it in a loop. Open the
@@ -107,28 +134,26 @@ vault once, then poll `WebPasswords`, each poll re-fetches CloudKit with no escr
 call and reflects entries added on the account's other devices:
 
 ```go
-pv, _ := client.OpenPasswords(passcode) // escrow runs once here
+kc, _ := client.OpenKeychain(refs[0], passcode) // escrow runs once here
 for {
-	pws, _ := pv.WebPasswords()          // cheap, CloudKit fetch only
+	pws, _ := kc.WebPasswords()          // cheap, CloudKit fetch only
 	// … diff, notify …
 	time.Sleep(30 * time.Minute)
 }
 ```
 
-### Multiple devices
+### Choosing a device
 
-On accounts with several trusted devices more than one recovery bottle can be
-viable, each needing its own device's passcode. List them (a free call, no escrow
-or passcode) and pick one:
+Recovery always goes through a specific bottle, so you always pass a `BottleRef`
+from `ViableBottles`, there is no auto-select shortcut. On a single-device account
+that's just `refs[0]`; on an account with several trusted devices each `ref` needs
+its own device's passcode, so show `ref.Device` and let the user pick:
 
 ```go
-refs, _ := client.ViableBottles()
+refs, _ := client.ViableBottles() // a free call, no escrow or passcode
 // show refs[i].Device (Model, Name, Serial, Build) and let the user choose
-pv, _ := client.OpenPasswordsWith(refs[i], passcode)
+kc, _ := client.OpenKeychain(refs[i], passcode)
 ```
-
-The single-device case needs none of this, `WebPasswords` / `OpenPasswords` just
-use the sole bottle.
 
 ### Skipping escrow on later runs
 
@@ -137,17 +162,17 @@ actually opened with. Cache it and later runs skip escrow and the passcode
 entirely:
 
 ```go
-peer, _ := client.RecoverPeer(passcode) // once, the escrow round-trip
-save(peer)                              // PeerKey{PeerID, PrivateKey}, encrypt it!
+peer, _ := client.RecoverPeer(refs[0], passcode) // once, the escrow round-trip
+save(peer)                                        // PeerKey{PeerID, PrivateKey}, encrypt it!
 
 // every run after that:
-pv, _ := client.OpenPasswordsWithPeer(load()) // no escrow, no passcode
+kc, _ := client.OpenKeychainWithPeer(load()) // no escrow, no passcode
 ```
 
 The key stays valid across TLK rotations (the zone key is re-unwrapped from a
 freshly fetched TLKShare each time). It stops working only when that peer leaves
 the account's trust circle, i.e. the device was removed, so fall back to
-`RecoverPeer` when `OpenPasswordsWithPeer` fails.
+`RecoverPeer` when `OpenKeychainWithPeer` fails.
 
 > 🔑 **A PeerKey is a master key.** It decrypts the whole keychain, forever,
 > without the Apple ID password or the device passcode. Storing it in plaintext
@@ -254,8 +279,8 @@ use the `appleservices` facade shown above.
 
 ## Status
 
-Recovers **web passwords** (and their titles + TOTP codes) end-to-end. WiFi
-passwords, credit cards, passkeys and other keychain classes decrypt through the
+Recovers **web passwords** (titles + TOTP codes) and **Wi-Fi passwords**
+end-to-end. Credit cards, passkeys and other keychain classes decrypt through the
 same `ckks` path and are a small decoder away.
 
 ## License
