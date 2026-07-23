@@ -423,12 +423,12 @@ func (c *Client) VaultWithPeer(pk PeerKey) (*ckks.Vault, error) {
 	return ckks.OpenVault(c.ck, enc, pk.PeerID), nil
 }
 
-func (c *Client) OpenPasswordsWithPeer(pk PeerKey) (*PasswordVault, error) {
+func (c *Client) OpenKeychainWithPeer(pk PeerKey) (*KeychainVault, error) {
 	v, err := c.VaultWithPeer(pk)
 	if err != nil {
 		return nil, err
 	}
-	return &PasswordVault{v: v}, nil
+	return &KeychainVault{v: v}, nil
 }
 
 type Profile struct {
@@ -455,39 +455,47 @@ func (c *Client) Profile() (Profile, error) {
 }
 
 func (c *Client) WebPasswords(passcode string) ([]keychain.WebPassword, error) {
-	pv, err := c.OpenPasswords(passcode)
+	pv, err := c.OpenKeychain(passcode)
 	if err != nil {
 		return nil, err
 	}
 	return pv.WebPasswords()
 }
 
-type PasswordVault struct {
+type KeychainVault struct {
 	v *ckks.Vault
 }
 
-func (c *Client) OpenPasswords(passcode string) (*PasswordVault, error) {
+func (c *Client) OpenKeychain(passcode string) (*KeychainVault, error) {
 	v, err := c.Vault(passcode)
 	if err != nil {
 		return nil, err
 	}
-	return &PasswordVault{v: v}, nil
+	return &KeychainVault{v: v}, nil
 }
 
-func (c *Client) OpenPasswordsWith(ref BottleRef, passcode string) (*PasswordVault, error) {
+func (c *Client) OpenKeychainWith(ref BottleRef, passcode string) (*KeychainVault, error) {
 	v, err := c.openVaultWith(ref.bottle, passcode)
 	if err != nil {
 		return nil, err
 	}
-	return &PasswordVault{v: v}, nil
+	return &KeychainVault{v: v}, nil
 }
 
-func (pv *PasswordVault) WebPasswords() ([]keychain.WebPassword, error) {
+func (pv *KeychainVault) WebPasswords() ([]keychain.WebPassword, error) {
 	items, err := pv.v.Items("Passwords")
 	if err != nil {
 		return nil, fmt.Errorf("appleservices: fetch Passwords view: %w", err)
 	}
 	return keychain.WebPasswords(items), nil
+}
+
+func (pv *KeychainVault) WiFiPasswords() ([]keychain.WiFiPassword, error) {
+	items, err := pv.v.Items("WiFi")
+	if err != nil {
+		return nil, fmt.Errorf("appleservices: fetch WiFi view: %w", err)
+	}
+	return keychain.WiFiPasswords(items), nil
 }
 
 func sponsorPeerID(otBottle []byte) string {
