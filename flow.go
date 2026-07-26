@@ -238,14 +238,15 @@ func (l *Login) Client() (*Client, error) {
 	}
 
 	return &Client{
-		ck:       cloudkit.NewClient(auth, cfg),
-		anisette: l.anisette,
-		appleID:  l.creds.AppleID,
-		password: l.creds.Password,
-		mme:      dt.MMEAuthToken,
-		dsid:     dt.DSID,
-		altDSID:  l.adsid,
-		mintPET:  l.freshPET,
+		ck:           cloudkit.NewClient(auth, cfg),
+		anisette:     l.anisette,
+		appleID:      l.creds.AppleID,
+		password:     l.creds.Password,
+		mme:          dt.MMEAuthToken,
+		dsid:         dt.DSID,
+		altDSID:      l.adsid,
+		mintPET:      l.freshPET,
+		mintIdentity: l.freshIdentity,
 	}, nil
 }
 
@@ -269,6 +270,14 @@ func (l *Login) freshPET() (pet, adsid string, err error) {
 	return pet, adsid, err
 }
 
+func (l *Login) freshIdentity() (adsid, gsIdmsToken string, err error) {
+	_, adsid, spd, err := l.reLogin()
+	if err != nil {
+		return "", "", err
+	}
+	return adsid, spdString(spd, "GsIdmsToken"), nil
+}
+
 func (l *Login) reLogin() (pet, adsid string, spd map[string]any, err error) {
 	res, err := l.backend.Login(l.creds.AppleID, l.creds.Password)
 	if err != nil {
@@ -289,21 +298,23 @@ func (l *Login) reLogin() (pet, adsid string, spd map[string]any, err error) {
 }
 
 type Client struct {
-	ck       *cloudkit.Client
-	anisette gsa.AnisetteProvider
-	appleID  string
-	password string
-	mme      string
-	dsid     string
-	altDSID  string
-	mintPET  func() (pet, adsid string, err error)
+	ck           *cloudkit.Client
+	anisette     gsa.AnisetteProvider
+	appleID      string
+	password     string
+	mme          string
+	dsid         string
+	altDSID      string
+	mintPET      func() (pet, adsid string, err error)
+	mintIdentity func() (adsid, gsIdmsToken string, err error)
 }
 
 type BottleDevice = octagon.BottleDevice
 
 type BottleRef struct {
-	Device BottleDevice
-	bottle octagon.Bottle
+	Device   BottleDevice
+	ImageURL string
+	bottle   octagon.Bottle
 }
 
 func (c *Client) ViableBottles() ([]BottleRef, error) {
@@ -315,6 +326,11 @@ func (c *Client) ViableBottles() ([]BottleRef, error) {
 	refs := make([]BottleRef, 0, len(all))
 	for _, b := range all {
 		refs = append(refs, BottleRef{Device: b.Device, bottle: b})
+	}
+	if devs, err := c.Devices(); err == nil {
+		for i := range refs {
+			refs[i].ImageURL = matchDeviceImage(refs[i].Device, devs)
+		}
 	}
 	return refs, nil
 }
