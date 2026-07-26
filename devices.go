@@ -46,14 +46,14 @@ func classFamily(s string) string {
 	}
 }
 
-func deviceImageURL(d icloud.AccountDevice) string {
+func deviceImageURL(d *icloud.AccountDevice) string {
 	if d.ListImageURL2x != "" {
 		return d.ListImageURL2x
 	}
 	return d.ListImageURL
 }
 
-func matchDeviceImage(b BottleDevice, devices []icloud.AccountDevice) string {
+func matchDevice(b BottleDevice, devices []icloud.AccountDevice) *icloud.AccountDevice {
 	fam := classFamily(b.Class)
 	var candidates []icloud.AccountDevice
 	for _, d := range devices {
@@ -62,10 +62,10 @@ func matchDeviceImage(b BottleDevice, devices []icloud.AccountDevice) string {
 		}
 	}
 	if len(candidates) == 1 {
-		return deviceImageURL(candidates[0])
+		return &candidates[0]
 	}
 	if len(candidates) == 0 {
-		return ""
+		return nil
 	}
 	var named []icloud.AccountDevice
 	for _, d := range candidates {
@@ -74,7 +74,7 @@ func matchDeviceImage(b BottleDevice, devices []icloud.AccountDevice) string {
 		}
 	}
 	if len(named) == 1 {
-		return deviceImageURL(named[0])
+		return &named[0]
 	}
 	var modeled []icloud.AccountDevice
 	bm := strings.ToLower(b.Model)
@@ -84,7 +84,7 @@ func matchDeviceImage(b BottleDevice, devices []icloud.AccountDevice) string {
 		}
 	}
 	if len(modeled) == 1 {
-		return deviceImageURL(modeled[0])
+		return &modeled[0]
 	}
-	return ""
+	return nil
 }

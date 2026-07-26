@@ -31,11 +31,15 @@ type Bottle struct {
 }
 
 type BottleDevice struct {
-	Name   string
-	Model  string
-	Class  string
-	Serial string
-	Build  string
+	Name       string
+	Model      string
+	ShortModel string
+	OS         string
+	OSVersion  string
+	ImageURL   string
+	Class      string
+	Serial     string
+	Build      string
 }
 
 func MarshalBottle(v Bottle) []byte {

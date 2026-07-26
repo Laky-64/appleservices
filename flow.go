@@ -312,9 +312,8 @@ type Client struct {
 type BottleDevice = octagon.BottleDevice
 
 type BottleRef struct {
-	Device   BottleDevice
-	ImageURL string
-	bottle   octagon.Bottle
+	Device BottleDevice
+	bottle octagon.Bottle
 }
 
 func (c *Client) ViableBottles() ([]BottleRef, error) {
@@ -329,7 +328,13 @@ func (c *Client) ViableBottles() ([]BottleRef, error) {
 	}
 	if devs, err := c.Devices(); err == nil {
 		for i := range refs {
-			refs[i].ImageURL = matchDeviceImage(refs[i].Device, devs)
+			if device := matchDevice(refs[i].Device, devs); device != nil {
+				refs[i].Device.Name = device.Name
+				refs[i].Device.ShortModel = device.ModelName
+				refs[i].Device.OS = device.OS
+				refs[i].Device.OSVersion = device.OSVersion
+				refs[i].Device.ImageURL = deviceImageURL(device)
+			}
 		}
 	}
 	return refs, nil
