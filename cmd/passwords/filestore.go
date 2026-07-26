@@ -57,6 +57,12 @@ func (s fileStore) LoadSession() (*appleservices.Session, error) {
 }
 
 func (s fileStore) SaveSession(sess *appleservices.Session) error {
+	if sess == nil {
+		if err := os.Remove(s.sessionPath()); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
 	if err := os.MkdirAll(s.dir, 0o700); err != nil {
 		return err
 	}

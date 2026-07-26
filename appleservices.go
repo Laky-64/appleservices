@@ -1,12 +1,27 @@
 package appleservices
 
-import "github.com/Laky-64/appleservices/gsa"
+import (
+	"errors"
+	"fmt"
+
+	"github.com/Laky-64/appleservices/gsa"
+)
 
 type Store interface {
 	LoadDevice() (*Device, error)
 	SaveDevice(*Device) error
 	LoadSession() (*Session, error)
 	SaveSession(*Session) error
+}
+
+func Logout(store Store) error {
+	if store == nil {
+		return errors.New("appleservices: Logout requires a Store")
+	}
+	if err := store.SaveSession(nil); err != nil {
+		return fmt.Errorf("appleservices: Logout: clear session: %w", err)
+	}
+	return nil
 }
 
 type Device struct {
