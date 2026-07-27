@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/Laky-64/http"
+	"github.com/Laky-64/http/types"
 
 	"github.com/Laky-64/appleservices/internal/protobuf"
 	"github.com/Laky-64/appleservices/internal/uuid"
@@ -44,19 +45,10 @@ func buildRecordSyncBody(zone, userID string, header []byte) []byte {
 }
 
 func (c *Client) RecordSyncZone(zone string) ([]byte, error) {
-	header := BuildCodeInvokeHeader(c.auth.Header)
-	body := octagon.FrameCodeInvoke(buildRecordSyncBody(zone, c.cfg.UserID, header))
-
-	headers := buildHeaders(c.auth, c.cfg.UserID)
-	headers["Content-Type"] = "application/x-protobuf"
-	headers["Accept"] = "application/x-protobuf"
-
-	result, err := http.ExecuteRequest(c.cfg.DatabaseURL+"/api/client/record/sync",
-		http.Method("POST"),
-		http.Body(body),
-		http.Headers(headers),
-		http.Timeout(90*time.Second),
-	)
+	result, err := c.recordSyncZoneOnce(zone)
+	if result != nil && result.StatusCode == statusUnauthorized && c.reauthenticate() {
+		result, err = c.recordSyncZoneOnce(zone)
+	}
 	if result != nil && result.StatusCode != 200 {
 		return nil, fmt.Errorf("cloudkit: record/sync %s status %d: %s", zone, result.StatusCode, snippet(result.Body))
 	}
@@ -67,4 +59,20 @@ func (c *Client) RecordSyncZone(zone string) ([]byte, error) {
 		return nil, fmt.Errorf("cloudkit: record/sync %s: no response", zone)
 	}
 	return result.Body, nil
+}
+
+func (c *Client) recordSyncZoneOnce(zone string) (*types.HTTPResult, error) {
+	header := BuildCodeInvokeHeader(c.auth.Header)
+	body := octagon.FrameCodeInvoke(buildRecordSyncBody(zone, c.cfg.UserID, header))
+
+	headers := buildHeaders(c.auth, c.cfg.UserID)
+	headers["Content-Type"] = "application/x-protobuf"
+	headers["Accept"] = "application/x-protobuf"
+
+	return http.ExecuteRequest(c.cfg.DatabaseURL+"/api/client/record/sync",
+		http.Method("POST"),
+		http.Body(body),
+		http.Headers(headers),
+		http.Timeout(90*time.Second),
+	)
 }

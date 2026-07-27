@@ -188,13 +188,50 @@ func (l *Login) Client() (*Client, error) {
 		return nil, err
 	}
 
+	auth, cfg, dt, err := l.cloudKitAuth(pet)
+	if err != nil {
+		return nil, err
+	}
+
+	c := &Client{
+		ck:           cloudkit.NewClient(auth, cfg),
+		anisette:     l.anisette,
+		appleID:      l.creds.AppleID,
+		password:     l.creds.Password,
+		mme:          dt.MMEAuthToken,
+		dsid:         dt.DSID,
+		altDSID:      l.adsid,
+		mintPET:      l.freshPET,
+		mintIdentity: l.freshIdentity,
+	}
+	c.ck.SetReauth(func() (cloudkit.Auth, cloudkit.AppConfig, error) {
+		freshPET, adsid, err := l.freshPET()
+		if err != nil {
+			return cloudkit.Auth{}, cloudkit.AppConfig{}, err
+		}
+		if adsid != "" {
+			l.adsid = adsid
+			c.altDSID = adsid
+		}
+		auth, cfg, dt, err := l.cloudKitAuth(freshPET)
+		if err != nil {
+			return cloudkit.Auth{}, cloudkit.AppConfig{}, err
+		}
+		c.mme = dt.MMEAuthToken
+		c.dsid = dt.DSID
+		return auth, cfg, nil
+	})
+	return c, nil
+}
+
+func (l *Login) cloudKitAuth(pet string) (cloudkit.Auth, cloudkit.AppConfig, icloud.DelegateTokens, error) {
 	delegAnis, err := l.anisette.Headers()
 	if err != nil {
-		return nil, fmt.Errorf("appleservices: anisette headers: %w", err)
+		return cloudkit.Auth{}, cloudkit.AppConfig{}, icloud.DelegateTokens{}, fmt.Errorf("appleservices: anisette headers: %w", err)
 	}
 	dt, err := icloud.FetchDelegateTokens(delegAnis, l.creds.AppleID, l.adsid, pet)
 	if err != nil {
-		return nil, fmt.Errorf("appleservices: delegate tokens: %w", err)
+		return cloudkit.Auth{}, cloudkit.AppConfig{}, icloud.DelegateTokens{}, fmt.Errorf("appleservices: delegate tokens: %w", err)
 	}
 	ckTok := dt.CloudKitToken
 	if ckTok == "" {
@@ -203,7 +240,7 @@ func (l *Login) Client() (*Client, error) {
 
 	appInitAnis, err := l.anisette.Headers()
 	if err != nil {
-		return nil, fmt.Errorf("appleservices: anisette headers: %w", err)
+		return cloudkit.Auth{}, cloudkit.AppConfig{}, icloud.DelegateTokens{}, fmt.Errorf("appleservices: anisette headers: %w", err)
 	}
 	deviceID := fmt.Sprintf("%x", sha256.Sum256([]byte(appInitAnis["X-Mme-Device-Id"]+dt.DSID)))
 	computerName, _ := os.Hostname()
@@ -234,20 +271,9 @@ func (l *Login) Client() (*Client, error) {
 	}
 	cfg, err := cloudkit.AppInit(auth)
 	if err != nil {
-		return nil, fmt.Errorf("appleservices: ckAppInit: %w", err)
+		return cloudkit.Auth{}, cloudkit.AppConfig{}, icloud.DelegateTokens{}, fmt.Errorf("appleservices: ckAppInit: %w", err)
 	}
-
-	return &Client{
-		ck:           cloudkit.NewClient(auth, cfg),
-		anisette:     l.anisette,
-		appleID:      l.creds.AppleID,
-		password:     l.creds.Password,
-		mme:          dt.MMEAuthToken,
-		dsid:         dt.DSID,
-		altDSID:      l.adsid,
-		mintPET:      l.freshPET,
-		mintIdentity: l.freshIdentity,
-	}, nil
+	return auth, cfg, dt, nil
 }
 
 func (l *Login) spd() (map[string]any, error) {
