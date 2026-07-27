@@ -22,22 +22,33 @@ import (
 	"howett.net/plist"
 )
 
+const anisetteMaxAge = 60 * time.Second
+
 type Client struct {
 	anisette              AnisetteProvider
 	transport             nethttp.RoundTripper
 	cookieJar             *cookiejar.Jar
 	cachedAnisetteHeaders map[string]string
+	anisetteFetchedAt     time.Time
 }
 
 func (c *Client) anisetteHeaders() (map[string]string, error) {
-	if c.cachedAnisetteHeaders != nil {
+	if c.cachedAnisetteHeaders != nil && time.Since(c.anisetteFetchedAt) < anisetteMaxAge {
 		return c.cachedAnisetteHeaders, nil
 	}
+	return c.refreshAnisetteHeaders()
+}
+
+func (c *Client) refreshAnisetteHeaders() (map[string]string, error) {
 	h, err := c.anisette.Headers()
 	if err != nil {
+		if c.cachedAnisetteHeaders != nil {
+			return c.cachedAnisetteHeaders, nil
+		}
 		return nil, fmt.Errorf("gsa: anisette headers: %w", err)
 	}
 	c.cachedAnisetteHeaders = h
+	c.anisetteFetchedAt = time.Now()
 	return h, nil
 }
 
@@ -214,6 +225,10 @@ func decryptSPD(sessionKey, spd []byte) (map[string]any, error) {
 func (c *Client) Login(username, password string) (*LoginResult, error) {
 	params := srp.NewParams()
 	client := srp.NewClient(params, username)
+
+	if _, err := c.refreshAnisetteHeaders(); err != nil {
+		return nil, err
+	}
 
 	initCPD, err := c.buildCPD()
 	if err != nil {
