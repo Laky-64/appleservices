@@ -1,6 +1,9 @@
 package keychain
 
 import (
+	"encoding/base32"
+	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -189,6 +192,50 @@ func totpURL(v any) string {
 	if !ok {
 		return ""
 	}
-	return asString(m["originalURL"])
+	if s := asString(m["originalURL"]); s != "" {
+		return s
+	}
+	return synthesizeTOTPURL(m)
 }
 
+func synthesizeTOTPURL(m map[string]any) string {
+	secret, ok := m["secret"].([]byte)
+	if !ok || len(secret) == 0 {
+		return ""
+	}
+	q := url.Values{}
+	q.Set("secret", base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(secret))
+
+	switch totpInt(m["algorithm"]) {
+	case 1:
+		q.Set("algorithm", "SHA256")
+	case 2:
+		q.Set("algorithm", "SHA512")
+	default:
+		q.Set("algorithm", "SHA1")
+	}
+	if d := totpInt(m["digits"]); d > 0 {
+		q.Set("digits", fmt.Sprintf("%d", d))
+	}
+	if p := totpInt(m["period"]); p > 0 {
+		q.Set("period", fmt.Sprintf("%d", p))
+	}
+	u := url.URL{Scheme: "otpauth", Host: "totp", Path: "/", RawQuery: q.Encode()}
+	return u.String()
+}
+
+func totpInt(v any) int64 {
+	switch n := v.(type) {
+	case int64:
+		return n
+	case uint64:
+		return int64(n)
+	case int:
+		return int64(n)
+	case uint8:
+		return int64(n)
+	case float64:
+		return int64(n)
+	}
+	return 0
+}
