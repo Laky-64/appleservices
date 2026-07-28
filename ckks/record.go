@@ -32,12 +32,12 @@ func parseRecord(rec []byte) (Record, error) {
 			recordID = f.Bytes
 		}
 	}
-	if body == nil {
-		return Record{}, fmt.Errorf("ckks: record missing body (field 5)")
-	}
 	name, err := recordNameFromID(recordID)
 	if err != nil {
 		return Record{}, fmt.Errorf("ckks: parsing record name: %w", err)
+	}
+	if body == nil {
+		return Record{Name: name, Fields: map[string]CKValue{}}, nil
 	}
 
 	inner, err := protobuf.ReadFields(body)
