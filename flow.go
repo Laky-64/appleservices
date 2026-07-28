@@ -15,6 +15,7 @@ import (
 	"github.com/Laky-64/appleservices/gsa"
 	"github.com/Laky-64/appleservices/icloud"
 	"github.com/Laky-64/appleservices/internal/protobuf"
+	"github.com/Laky-64/appleservices/internal/uuid"
 	"github.com/Laky-64/appleservices/keychain"
 	"github.com/Laky-64/appleservices/octagon"
 )
@@ -534,6 +535,38 @@ func (pv *KeychainVault) Passkeys() ([]keychain.Passkey, error) {
 		return nil, fmt.Errorf("appleservices: fetch Passwords view: %w", err)
 	}
 	return keychain.Passkeys(items), nil
+}
+
+func (pv *KeychainVault) AddWebPassword(domain, username, password string) error {
+	attrs, err := keychain.EncodeWebPasswordItem(domain, username, password)
+	if err != nil {
+		return fmt.Errorf("appleservices: %w", err)
+	}
+	if _, _, err := pv.v.AddItem("Passwords", attrs); err != nil {
+		return fmt.Errorf("appleservices: add web password: %w", err)
+	}
+	return nil
+}
+
+func (pv *KeychainVault) AddManualPassword(title, username, password string) error {
+	id := uuid.New()
+
+	cred, err := keychain.EncodeWebPasswordItem(id, username, password)
+	if err != nil {
+		return fmt.Errorf("appleservices: %w", err)
+	}
+	if _, _, err := pv.v.AddItem("Passwords", cred); err != nil {
+		return fmt.Errorf("appleservices: add manual password: %w", err)
+	}
+
+	meta, err := keychain.EncodeManualMetadataItem(id, username, title)
+	if err != nil {
+		return fmt.Errorf("appleservices: %w", err)
+	}
+	if _, _, err := pv.v.AddItem("Passwords", meta); err != nil {
+		return fmt.Errorf("appleservices: manual password credential saved but title metadata failed: %w", err)
+	}
+	return nil
 }
 
 func sponsorPeerID(otBottle []byte) string {
