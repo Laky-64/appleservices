@@ -106,6 +106,9 @@ func run() error {
 		if len(pw.Domains) > 1 {
 			fmt.Printf("\tdomains=%s", strings.Join(pw.Domains, ","))
 		}
+		if pw.Note != "" {
+			fmt.Printf("\tnote=%q", pw.Note)
+		}
 		fmt.Println()
 	}
 

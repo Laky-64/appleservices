@@ -19,6 +19,7 @@ type WebPassword struct {
 	Username string
 	Password string
 	TOTP     string
+	Note     string
 	Created  time.Time
 	Modified time.Time
 }
@@ -27,6 +28,7 @@ type entryMeta struct {
 	srvr    string
 	title   string
 	totp    string
+	note    string
 	domains []string
 }
 
@@ -36,8 +38,8 @@ func WebPasswords(items []Item) []WebPassword {
 		switch it.Agrp {
 		case "com.apple.password-manager":
 			dict := parsePlist(it.Data)
-			m := entryMeta{srvr: it.Srvr, title: asString(dict["title"]), totp: totpURL(dict["totp"]), domains: siteAssociations(dict["s_as"])}
-			if m.title != "" || m.totp != "" || len(m.domains) > 0 {
+			m := entryMeta{srvr: it.Srvr, title: asString(dict["title"]), totp: totpURL(dict["totp"]), note: asString(dict["notes"]), domains: siteAssociations(dict["s_as"])}
+			if m.title != "" || m.totp != "" || m.note != "" || len(m.domains) > 0 {
 				manual = append(manual, m)
 			}
 		case "com.apple.password-manager.website-metadata":
@@ -69,6 +71,15 @@ func WebPasswords(items []Item) []WebPassword {
 		return ""
 	}
 
+	note := func(srvr string) string {
+		for _, m := range manual {
+			if m.srvr == srvr {
+				return m.note
+			}
+		}
+		return ""
+	}
+
 	associated := func(srvr string) []string {
 		for _, m := range manual {
 			if m.srvr == srvr {
@@ -92,6 +103,7 @@ func WebPasswords(items []Item) []WebPassword {
 			Username: it.Acct,
 			Password: string(it.Data),
 			TOTP:     totp(it.Srvr),
+			Note:     note(it.Srvr),
 		}
 		if cdat, ok := it.Attrs["cdat"].(time.Time); ok {
 			wp.Created = cdat

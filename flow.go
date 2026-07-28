@@ -537,7 +537,7 @@ func (pv *KeychainVault) Passkeys() ([]keychain.Passkey, error) {
 	return keychain.Passkeys(items), nil
 }
 
-func (pv *KeychainVault) AddWebPassword(domain, username, password string) error {
+func (pv *KeychainVault) AddWebPassword(domain, username, password, note string) error {
 	attrs, err := keychain.EncodeWebPasswordItem(domain, username, password)
 	if err != nil {
 		return fmt.Errorf("appleservices: %w", err)
@@ -545,10 +545,19 @@ func (pv *KeychainVault) AddWebPassword(domain, username, password string) error
 	if _, _, err := pv.v.AddItem("Passwords", attrs); err != nil {
 		return fmt.Errorf("appleservices: add web password: %w", err)
 	}
+	if note != "" {
+		meta, err := keychain.EncodeMetadataItem(domain, username, domain, note)
+		if err != nil {
+			return fmt.Errorf("appleservices: %w", err)
+		}
+		if _, _, err := pv.v.AddItem("Passwords", meta); err != nil {
+			return fmt.Errorf("appleservices: web password saved but note metadata failed: %w", err)
+		}
+	}
 	return nil
 }
 
-func (pv *KeychainVault) AddManualPassword(title, username, password string) error {
+func (pv *KeychainVault) AddManualPassword(title, username, password, note string) error {
 	id := uuid.New()
 
 	cred, err := keychain.EncodeWebPasswordItem(id, username, password)
@@ -559,7 +568,7 @@ func (pv *KeychainVault) AddManualPassword(title, username, password string) err
 		return fmt.Errorf("appleservices: add manual password: %w", err)
 	}
 
-	meta, err := keychain.EncodeManualMetadataItem(id, username, title)
+	meta, err := keychain.EncodeMetadataItem(id, username, title, note)
 	if err != nil {
 		return fmt.Errorf("appleservices: %w", err)
 	}
