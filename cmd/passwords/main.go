@@ -116,6 +116,14 @@ func run() error {
 	for _, w := range wifis {
 		fmt.Printf("[wifi] %s\t%s\n", w.SSID, w.Password)
 	}
+
+	passkeys, err := kc.Passkeys()
+	if err != nil {
+		return fmt.Errorf("passkeys: %w", err)
+	}
+	for _, pk := range passkeys {
+		fmt.Printf("[passkey] %s\t%s\t%s\n", pk.RelyingParty, pk.UserName, pk.DisplayName)
+	}
 	return nil
 }
 

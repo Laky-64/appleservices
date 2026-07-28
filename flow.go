@@ -528,6 +528,14 @@ func (pv *KeychainVault) WiFiPasswords() ([]keychain.WiFiPassword, error) {
 	return keychain.WiFiPasswords(items), nil
 }
 
+func (pv *KeychainVault) Passkeys() ([]keychain.Passkey, error) {
+	items, err := pv.v.Items("Passwords")
+	if err != nil {
+		return nil, fmt.Errorf("appleservices: fetch Passwords view: %w", err)
+	}
+	return keychain.Passkeys(items), nil
+}
+
 func sponsorPeerID(otBottle []byte) string {
 	if fs, err := protobuf.ReadFields(otBottle); err == nil {
 		for _, f := range fs {
