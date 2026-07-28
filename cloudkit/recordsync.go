@@ -12,7 +12,7 @@ import (
 	"github.com/Laky-64/appleservices/octagon"
 )
 
-func buildRecordSyncBody(zone, userID string, header []byte) []byte {
+func buildRecordSyncBody(zone, userID string, header, token []byte) []byte {
 	op := protobuf.NewWriter()
 	op.WriteBytes(1, []byte(uuid.New()))
 	op.WriteVarint(2, 213)
@@ -32,6 +32,9 @@ func buildRecordSyncBody(zone, userID string, header []byte) []byte {
 	zid.WriteVarint(3, 1)
 
 	zfr := protobuf.NewWriter()
+	if token != nil {
+		zfr.WriteBytes(1, token)
+	}
 	zfr.WriteBytes(2, zid.Bytes())
 	zfr.WriteVarint(5, 3)
 
@@ -44,10 +47,63 @@ func buildRecordSyncBody(zone, userID string, header []byte) []byte {
 	return reqOp.Bytes()
 }
 
+const (
+	SyncInconsistent     = 1
+	SyncConsistent       = 2
+	SyncNoPendingChanges = 3
+)
+
+func SyncContinuationToken(body []byte) []byte {
+	if inner := changesResponse(body); inner != nil {
+		for _, in := range inner {
+			if in.Number == 2 && in.WireType == protobuf.WireBytes {
+				return in.Bytes
+			}
+		}
+	}
+	return nil
+}
+
+func SyncStatus(body []byte) int {
+	if inner := changesResponse(body); inner != nil {
+		for _, in := range inner {
+			if in.Number == 4 && in.WireType == protobuf.WireVarint {
+				return int(in.Varint)
+			}
+		}
+	}
+	return 0
+}
+
+func changesResponse(body []byte) []protobuf.Field {
+	msg := body
+	if m, err := octagon.UnframeCodeInvoke(body); err == nil {
+		msg = m
+	}
+	fields, err := protobuf.ReadFields(msg)
+	if err != nil {
+		return nil
+	}
+	for _, f := range fields {
+		if f.Number == 213 && f.WireType == protobuf.WireBytes {
+			inner, err := protobuf.ReadFields(f.Bytes)
+			if err != nil {
+				return nil
+			}
+			return inner
+		}
+	}
+	return nil
+}
+
 func (c *Client) RecordSyncZone(zone string) ([]byte, error) {
-	result, err := c.recordSyncZoneOnce(zone)
+	return c.RecordSyncZoneSince(zone, nil)
+}
+
+func (c *Client) RecordSyncZoneSince(zone string, token []byte) ([]byte, error) {
+	result, err := c.recordSyncZoneOnce(zone, token)
 	if result != nil && result.StatusCode == statusUnauthorized && c.reauthenticate() {
-		result, err = c.recordSyncZoneOnce(zone)
+		result, err = c.recordSyncZoneOnce(zone, token)
 	}
 	if result != nil && result.StatusCode != 200 {
 		return nil, fmt.Errorf("cloudkit: record/sync %s status %d: %s", zone, result.StatusCode, snippet(result.Body))
@@ -61,9 +117,9 @@ func (c *Client) RecordSyncZone(zone string) ([]byte, error) {
 	return result.Body, nil
 }
 
-func (c *Client) recordSyncZoneOnce(zone string) (*types.HTTPResult, error) {
+func (c *Client) recordSyncZoneOnce(zone string, token []byte) (*types.HTTPResult, error) {
 	header := BuildCodeInvokeHeader(c.auth.Header)
-	body := octagon.FrameCodeInvoke(buildRecordSyncBody(zone, c.cfg.UserID, header))
+	body := octagon.FrameCodeInvoke(buildRecordSyncBody(zone, c.cfg.UserID, header, token))
 
 	headers := buildHeaders(c.auth, c.cfg.UserID)
 	headers["Content-Type"] = "application/x-protobuf"

@@ -23,9 +23,15 @@ type Vault struct {
 	zones map[string]*zoneKeys
 }
 
+type classKeyInfo struct {
+	key  []byte
+	uuid string
+}
+
 type zoneKeys struct {
 	tlk       []byte
 	classKeys [][]byte
+	classes   map[string]classKeyInfo
 }
 
 func OpenVault(ck *cloudkit.Client, sponsorEnc *ecdsa.PrivateKey, sponsorPeerID string) *Vault {
@@ -37,14 +43,51 @@ func OpenVault(ck *cloudkit.Client, sponsorEnc *ecdsa.PrivateKey, sponsorPeerID 
 	}
 }
 
-func (v *Vault) Items(view string) ([]keychain.Item, error) {
-	body, err := v.ck.RecordSyncZone(view)
-	if err != nil {
-		return nil, fmt.Errorf("ckks: fetch view %q: %w", view, err)
+const maxSyncPages = 100
+
+func (v *Vault) fetchZoneRecords(view string) ([]Record, error) {
+	var out []Record
+	index := map[string]int{}
+	var token []byte
+	for page := 0; page < maxSyncPages; page++ {
+		body, err := v.ck.RecordSyncZoneSince(view, token)
+		if err != nil {
+			return nil, fmt.Errorf("ckks: fetch view %q: %w", view, err)
+		}
+		records, err := ParseZone(body)
+		if err != nil {
+			return nil, fmt.Errorf("ckks: parse view %q: %w", view, err)
+		}
+		added := 0
+		for _, r := range records {
+			if r.Name != "" {
+				if i, ok := index[r.Name]; ok {
+					out[i] = r
+					continue
+				}
+				index[r.Name] = len(out)
+			}
+			out = append(out, r)
+			added++
+		}
+
+		next := cloudkit.SyncContinuationToken(body)
+		status := cloudkit.SyncStatus(body)
+		if status == cloudkit.SyncNoPendingChanges || next == nil {
+			break
+		}
+		if page > 0 && added == 0 {
+			break
+		}
+		token = next
 	}
-	records, err := ParseZone(body)
+	return out, nil
+}
+
+func (v *Vault) Items(view string) ([]keychain.Item, error) {
+	records, err := v.fetchZoneRecords(view)
 	if err != nil {
-		return nil, fmt.Errorf("ckks: parse view %q: %w", view, err)
+		return nil, err
 	}
 
 	keys, err := v.zoneKeysFor(view, records)
@@ -77,11 +120,11 @@ func (v *Vault) zoneKeysFor(view string, records []Record) (*zoneKeys, error) {
 	if err != nil {
 		return nil, err
 	}
-	classKeys, err := deriveClassKeys(records, tlk)
+	classKeys, classes, err := deriveClassKeys(records, tlk)
 	if err != nil {
 		return nil, err
 	}
-	zk := &zoneKeys{tlk: tlk, classKeys: classKeys}
+	zk := &zoneKeys{tlk: tlk, classKeys: classKeys, classes: classes}
 	v.zones[view] = zk
 	return zk, nil
 }
@@ -121,8 +164,8 @@ func tlkKeyFromCKKSKey(pt []byte) ([]byte, error) {
 	return nil, fmt.Errorf("ckks: CKKSKey has no 64-byte key at field 4 (plaintext %dB)", len(pt))
 }
 
-func deriveClassKeys(records []Record, tlk []byte) ([][]byte, error) {
-	var classKeys [][]byte
+func deriveClassKeys(records []Record, tlk []byte) (classKeys [][]byte, classes map[string]classKeyInfo, err error) {
+	classes = map[string]classKeyInfo{}
 	for _, rec := range records {
 		if rec.Type != "synckey" {
 			continue
@@ -133,18 +176,21 @@ func deriveClassKeys(records []Record, tlk []byte) ([][]byte, error) {
 		}
 		wrapped, err := base64.StdEncoding.DecodeString(string(rec.Fields["wrappedkey"].Bytes))
 		if err != nil {
-			return nil, fmt.Errorf("ckks: %s synckey wrappedkey base64: %w", class, err)
+			return nil, nil, fmt.Errorf("ckks: %s synckey wrappedkey base64: %w", class, err)
 		}
 		key, err := UnwrapKey(tlk, wrapped)
 		if err != nil {
-			return nil, fmt.Errorf("ckks: unwrap %s class key: %w", class, err)
+			return nil, nil, fmt.Errorf("ckks: unwrap %s class key: %w", class, err)
 		}
 		classKeys = append(classKeys, key)
+		if _, ok := classes[class]; !ok {
+			classes[class] = classKeyInfo{key: key, uuid: rec.Name}
+		}
 	}
 	if len(classKeys) == 0 {
-		return nil, fmt.Errorf("ckks: no class keys in zone")
+		return nil, nil, fmt.Errorf("ckks: no class keys in zone")
 	}
-	return classKeys, nil
+	return classKeys, classes, nil
 }
 
 func decryptItemRecord(rec Record, classKeys [][]byte) (keychain.Item, error) {
