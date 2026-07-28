@@ -15,6 +15,7 @@ type CKValue struct {
 type Record struct {
 	Type   string
 	Name   string
+	Etag   string
 	Fields map[string]CKValue
 }
 
@@ -48,6 +49,10 @@ func parseRecord(rec []byte) (Record, error) {
 	out := Record{Name: name, Fields: map[string]CKValue{}}
 	for _, f := range inner {
 		switch f.Number {
+		case 1:
+			if f.WireType == protobuf.WireBytes {
+				out.Etag = string(f.Bytes)
+			}
 		case 3:
 			t, err := protobuf.ReadFields(f.Bytes)
 			if err != nil {

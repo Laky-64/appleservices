@@ -1,10 +1,12 @@
 package ckks
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"encoding/base64"
 	"fmt"
 	"sync"
+	"time"
 
 	"howett.net/plist"
 
@@ -41,6 +43,60 @@ func OpenVault(ck *cloudkit.Client, sponsorEnc *ecdsa.PrivateKey, sponsorPeerID 
 		sponsorPeerID: sponsorPeerID,
 		zones:         map[string]*zoneKeys{},
 	}
+}
+
+func (v *Vault) DeleteRecord(view, recordName, etag string) (cloudkit.SaveResult, error) {
+	req := EncodeRecordDelete(recordName, view, v.ck.UserID(), etag)
+	return v.ck.RecordDelete(req)
+}
+
+func (v *Vault) MoveRecord(view, recordName, newAgrp string) (cloudkit.SaveResult, error) {
+	items, err := v.Items(view)
+	if err != nil {
+		return cloudkit.SaveResult{}, err
+	}
+	var target *keychain.Item
+	for i := range items {
+		if items[i].Name == recordName {
+			target = &items[i]
+			break
+		}
+	}
+	if target == nil {
+		return cloudkit.SaveResult{}, fmt.Errorf("ckks: record %q not found in view %q", recordName, view)
+	}
+
+	alreadyMoved := false
+	for i := range items {
+		o := &items[i]
+		if o.Agrp == newAgrp && o.Class == target.Class && o.Srvr == target.Srvr &&
+			o.Acct == target.Acct && bytes.Equal(o.Data, target.Data) {
+			alreadyMoved = true
+			break
+		}
+	}
+
+	if !alreadyMoved {
+		attrs := make(map[string]any, len(target.Attrs))
+		for k, val := range target.Attrs {
+			attrs[k] = val
+		}
+		attrs["agrp"] = newAgrp
+		attrs["mdat"] = time.Now().UTC()
+		delete(attrs, "sha1")
+		blob, err := plist.Marshal(attrs, plist.BinaryFormat)
+		if err != nil {
+			return cloudkit.SaveResult{}, fmt.Errorf("ckks: re-encode moved item: %w", err)
+		}
+		if _, sr, err := v.AddItem(view, blob); err != nil {
+			return sr, fmt.Errorf("ckks: move record (create in %q): %w", newAgrp, err)
+		}
+	}
+	sr, err := v.DeleteRecord(view, recordName, target.Etag)
+	if err != nil {
+		return sr, fmt.Errorf("ckks: move record (delete original %q): %w", recordName, err)
+	}
+	return sr, nil
 }
 
 const maxSyncPages = 100
@@ -211,7 +267,13 @@ func decryptItemRecord(rec Record, classKeys [][]byte) (keychain.Item, error) {
 	if err != nil {
 		return keychain.Item{}, fmt.Errorf("decrypt: %w", err)
 	}
-	return parseItemPlist(trimPadding(padded))
+	item, err := parseItemPlist(trimPadding(padded))
+	if err != nil {
+		return keychain.Item{}, err
+	}
+	item.Name = rec.Name
+	item.Etag = rec.Etag
+	return item, nil
 }
 
 func selectItemKey(classKeys [][]byte, wrapped []byte) ([]byte, error) {

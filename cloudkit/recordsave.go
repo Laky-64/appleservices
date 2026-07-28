@@ -31,6 +31,8 @@ func (e *SaveError) Error() string {
 		e.Code, e.ClientCode, e.ServerCode, e.Description)
 }
 
+func (e *SaveError) AlreadyExists() bool { return e.ClientCode == 9 }
+
 func buildRecordSaveBody(recordSaveRequest []byte, header []byte) []byte {
 	op := protobuf.NewWriter()
 	op.WriteBytes(1, []byte(uuid.New()))

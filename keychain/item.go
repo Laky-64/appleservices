@@ -8,4 +8,6 @@ type Item struct {
 	Labl  string
 	Attrs map[string]any
 	Data  []byte
+	Name  string
+	Etag  string
 }

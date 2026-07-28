@@ -22,8 +22,8 @@ func (w WebPassword) TOTPCode(t time.Time) (string, error) {
 	return TOTPCode(w.TOTP, t)
 }
 
-func TOTPCode(otpauthURL string, t time.Time) (string, error) {
-	u, err := url.Parse(otpauthURL)
+func TOTPCode(otpAuthURL string, t time.Time) (string, error) {
+	u, err := url.Parse(otpAuthURL)
 	if err != nil {
 		return "", fmt.Errorf("keychain: parse otpauth URL: %w", err)
 	}

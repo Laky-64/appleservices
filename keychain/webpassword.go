@@ -12,16 +12,24 @@ import (
 )
 
 type WebPassword struct {
-	Name     string
-	Domain   string
-	Domains  []string
-	Website  bool
-	Username string
-	Password string
-	TOTP     string
-	Note     string
-	Created  time.Time
-	Modified time.Time
+	Name      string
+	Domain    string
+	Domains   []string
+	Website   bool
+	Username  string
+	Password  string
+	TOTP      string
+	Note      string
+	Created   time.Time
+	Modified  time.Time
+	IsDeleted bool
+	DeletedAt time.Time
+	Deleted   []DeletedRef
+}
+
+type DeletedRef struct {
+	RecordName string
+	RecordEtag string
 }
 
 type entryMeta struct {
@@ -113,7 +121,130 @@ func WebPasswords(items []Item) []WebPassword {
 		}
 		result = append(result, wp)
 	}
+	result = append(result, deletedWebPasswords(items, title)...)
 	return result
+}
+
+func deletedWebPasswords(items []Item, resolveTitle func(srvr string) string) []WebPassword {
+	key := func(srvr, acct string) string { return srvr + "\x00" + acct }
+
+	type companion struct {
+		title, note string
+		ref         DeletedRef
+	}
+	companions := map[string]companion{}
+	for _, it := range items {
+		if it.Agrp != "com.apple.password-manager-recently-deleted" {
+			continue
+		}
+		d := parsePlist(it.Data)
+		companions[key(it.Srvr, it.Acct)] = companion{
+			title: firstNonEmpty(asString(d["title"]), sHiTitle(d["s_hi"])),
+			note:  asString(d["notes"]),
+			ref:   DeletedRef{RecordName: it.Name, RecordEtag: it.Etag},
+		}
+	}
+
+	seen := map[string]bool{}
+	var out []WebPassword
+
+	for _, it := range items {
+		if it.Class != "inet" || it.Agrp != "com.apple.cfnetwork-recently-deleted" {
+			continue
+		}
+		k := key(it.Srvr, it.Acct)
+		c := companions[k]
+		title := c.title
+		if title == "" {
+			title = resolveTitle(it.Srvr)
+		}
+		refs := []DeletedRef{{RecordName: it.Name, RecordEtag: it.Etag}}
+		if c.ref.RecordName != "" {
+			refs = append(refs, c.ref)
+		}
+		wp := WebPassword{
+			Name:      title,
+			Domain:    it.Srvr,
+			Website:   !uuid.IsCanonical(it.Srvr),
+			Username:  it.Acct,
+			Password:  string(it.Data),
+			Note:      c.note,
+			IsDeleted: true,
+			Deleted:   refs,
+		}
+		if mdat, ok := it.Attrs["mdat"].(time.Time); ok {
+			wp.DeletedAt = mdat
+		}
+		out = append(out, wp)
+		seen[k] = true
+	}
+
+	for _, it := range items {
+		if it.Class != "inet" || it.Agrp != "com.apple.password-manager.personal-recently-deleted" {
+			continue
+		}
+		k := key(it.Srvr, it.Acct)
+		if seen[k] {
+			continue
+		}
+		pw, title := deletedSecretAndTitle(parsePlist(it.Data)["s_hi"])
+		if title == "" {
+			title = resolveTitle(it.Srvr)
+		}
+		wp := WebPassword{
+			Name:      title,
+			Domain:    it.Srvr,
+			Website:   !uuid.IsCanonical(it.Srvr),
+			Username:  it.Acct,
+			Password:  pw,
+			IsDeleted: true,
+			Deleted:   []DeletedRef{{RecordName: it.Name, RecordEtag: it.Etag}},
+		}
+		if mdat, ok := it.Attrs["mdat"].(time.Time); ok {
+			wp.DeletedAt = mdat
+		}
+		out = append(out, wp)
+		seen[k] = true
+	}
+	return out
+}
+
+func firstNonEmpty(ss ...string) string {
+	for _, s := range ss {
+		if s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+func sHiTitle(v any) string {
+	_, title := deletedSecretAndTitle(v)
+	return title
+}
+
+func deletedSecretAndTitle(v any) (password, title string) {
+	arr, ok := v.([]any)
+	if !ok {
+		return "", ""
+	}
+	for _, e := range arr {
+		m, ok := e.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch asString(m["t"]) {
+		case "pwcr":
+			if p := asString(m["p"]); p != "" {
+				password = p
+			}
+		case "pwshgr":
+			if g := asString(m["gn"]); g != "" {
+				title = g
+			}
+		}
+	}
+	return password, title
 }
 
 func (w WebPassword) IconURL() string {

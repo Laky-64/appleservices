@@ -99,6 +99,9 @@ func run() error {
 		if pw.Website {
 			kind = "web"
 		}
+		if pw.IsDeleted {
+			kind = "deleted-" + kind
+		}
 		fmt.Printf("[%s] %s\t%s\t%s\t%s", kind, pw.Name, pw.Domain, pw.Username, pw.Password)
 		if code, err := pw.TOTPCode(time.Now()); err == nil {
 			fmt.Printf("\tTOTP=%s", code)
@@ -125,7 +128,11 @@ func run() error {
 		return fmt.Errorf("passkeys: %w", err)
 	}
 	for _, pk := range passkeys {
-		fmt.Printf("[passkey] %s\t%s\t%s\n", pk.RelyingParty, pk.UserName, pk.DisplayName)
+		kind := "passkey"
+		if pk.IsDeleted {
+			kind = "deleted-passkey"
+		}
+		fmt.Printf("[%s] %s\t%s\t%s\n", kind, pk.RelyingParty, pk.UserName, pk.DisplayName)
 	}
 	return nil
 }

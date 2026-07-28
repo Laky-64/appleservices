@@ -19,19 +19,24 @@ type Passkey struct {
 	PrivateKey   *ecdsa.PrivateKey
 	Created      time.Time
 	Modified     time.Time
+	IsDeleted    bool
+	DeletedAt    time.Time
+	Record       DeletedRef
 }
 
 func Passkeys(items []Item) []Passkey {
 	var result []Passkey
 	for _, it := range items {
-		if it.Class != "keys" || it.Agrp != "com.apple.webkit.webauthn" {
+		deleted := it.Agrp == "com.apple.webkit.webauthn-recently-deleted"
+		if it.Class != "keys" || (it.Agrp != "com.apple.webkit.webauthn" && !deleted) {
 			continue
 		}
 		key, err := parseP256KeyData(it.Data)
 		if err != nil {
 			continue
 		}
-		userHandle, userName, displayName := parseAtagCredential(asBytes(it.Attrs["atag"]))
+		atag := asBytes(it.Attrs["atag"])
+		userHandle, userName, displayName := parseAtagCredential(atag)
 		pk := Passkey{
 			RelyingParty: it.Labl,
 			UserName:     userName,
@@ -39,12 +44,17 @@ func Passkeys(items []Item) []Passkey {
 			CredentialID: asBytes(it.Attrs["alis"]),
 			UserHandle:   userHandle,
 			PrivateKey:   key,
+			IsDeleted:    deleted,
+			Record:       DeletedRef{RecordName: it.Name, RecordEtag: it.Etag},
 		}
 		if cdat, ok := it.Attrs["cdat"].(time.Time); ok {
 			pk.Created = cdat
 		}
 		if mdat, ok := it.Attrs["mdat"].(time.Time); ok {
 			pk.Modified = mdat
+			if deleted {
+				pk.DeletedAt = mdat
+			}
 		}
 		result = append(result, pk)
 	}

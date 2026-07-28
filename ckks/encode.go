@@ -144,6 +144,15 @@ func EncodeItemRecord(zoneName, owner string, classCKey []byte, classCUUID strin
 	return itemUUID, req.Bytes(), nil
 }
 
+func EncodeRecordDelete(recordName, zone, owner, etag string) []byte {
+	w := protobuf.NewWriter()
+	w.WriteBytes(1, recordIdentifier(recordName, zone, owner))
+	if etag != "" {
+		w.WriteBytes(2, []byte(etag))
+	}
+	return w.Bytes()
+}
+
 func (v *Vault) AddItem(view string, attrs []byte) (itemUUID string, sr cloudkit.SaveResult, err error) {
 	body, err := v.ck.RecordSyncZone(view)
 	if err != nil {

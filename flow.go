@@ -537,6 +537,44 @@ func (pv *KeychainVault) Passkeys() ([]keychain.Passkey, error) {
 	return keychain.Passkeys(items), nil
 }
 
+const (
+	agrpWebauthn        = "com.apple.webkit.webauthn"
+	agrpWebauthnDeleted = "com.apple.webkit.webauthn-recently-deleted"
+)
+
+func (pv *KeychainVault) DeletePasskey(pk keychain.Passkey) error {
+	if pk.IsDeleted {
+		return fmt.Errorf("appleservices: DeletePasskey: passkey %q is already deleted", pk.RelyingParty)
+	}
+	if pk.Record.RecordName == "" {
+		return fmt.Errorf("appleservices: DeletePasskey: passkey %q has no backing record", pk.RelyingParty)
+	}
+	if _, err := pv.v.MoveRecord("Passwords", pk.Record.RecordName, agrpWebauthnDeleted); err != nil {
+		return fmt.Errorf("appleservices: delete passkey: %w", err)
+	}
+	return nil
+}
+
+func (pv *KeychainVault) RestorePasskey(pk keychain.Passkey) error {
+	if !pk.IsDeleted || pk.Record.RecordName == "" {
+		return fmt.Errorf("appleservices: RestorePasskey: passkey %q is not a deleted entry", pk.RelyingParty)
+	}
+	if _, err := pv.v.MoveRecord("Passwords", pk.Record.RecordName, agrpWebauthn); err != nil {
+		return fmt.Errorf("appleservices: restore passkey: %w", err)
+	}
+	return nil
+}
+
+func (pv *KeychainVault) PurgePasskey(pk keychain.Passkey) error {
+	if !pk.IsDeleted || pk.Record.RecordName == "" {
+		return fmt.Errorf("appleservices: PurgePasskey: passkey %q is not a deleted entry", pk.RelyingParty)
+	}
+	if _, err := pv.v.DeleteRecord("Passwords", pk.Record.RecordName, pk.Record.RecordEtag); err != nil {
+		return fmt.Errorf("appleservices: purge passkey: %w", err)
+	}
+	return nil
+}
+
 func (pv *KeychainVault) AddWebPassword(domain, username, password, note string) error {
 	attrs, err := keychain.EncodeWebPasswordItem(domain, username, password)
 	if err != nil {
@@ -576,6 +614,83 @@ func (pv *KeychainVault) AddManualPassword(title, username, password, note strin
 		return fmt.Errorf("appleservices: manual password credential saved but title metadata failed: %w", err)
 	}
 	return nil
+}
+
+func (pv *KeychainVault) DeleteWebPassword(p keychain.WebPassword) error {
+	if p.IsDeleted {
+		return fmt.Errorf("appleservices: DeleteWebPassword: %q is already deleted", p.Domain)
+	}
+	items, err := pv.v.Items("Passwords")
+	if err != nil {
+		return fmt.Errorf("appleservices: delete web password: %w", err)
+	}
+	type activeRec struct{ name, agrp string }
+	var recs []activeRec
+	for _, it := range items {
+		if it.Srvr != p.Domain || it.Acct != p.Username {
+			continue
+		}
+		if it.Agrp == "com.apple.cfnetwork" || it.Agrp == "com.apple.password-manager" {
+			recs = append(recs, activeRec{it.Name, it.Agrp})
+		}
+	}
+	if len(recs) == 0 {
+		return fmt.Errorf("appleservices: DeleteWebPassword: no active records for %q (%s)", p.Domain, p.Username)
+	}
+	for _, r := range recs {
+		if _, err := pv.v.MoveRecord("Passwords", r.name, r.agrp+"-recently-deleted"); err != nil {
+			return fmt.Errorf("appleservices: delete web password (move %s): %w", r.name, err)
+		}
+	}
+	return nil
+}
+
+func (pv *KeychainVault) PurgeWebPassword(p keychain.WebPassword) error {
+	if !p.IsDeleted || len(p.Deleted) == 0 {
+		return fmt.Errorf("appleservices: PurgeWebPassword: %q is not a deleted entry", p.Domain)
+	}
+	for _, ref := range p.Deleted {
+		if _, err := pv.v.DeleteRecord("Passwords", ref.RecordName, ref.RecordEtag); err != nil {
+			return fmt.Errorf("appleservices: purge web password (record %s): %w", ref.RecordName, err)
+		}
+	}
+	return nil
+}
+
+func (pv *KeychainVault) RestoreWebPassword(p keychain.WebPassword) error {
+	if !p.IsDeleted || len(p.Deleted) == 0 {
+		return fmt.Errorf("appleservices: RestoreWebPassword: %q is not a deleted entry", p.Domain)
+	}
+	cred, err := keychain.EncodeWebPasswordItem(p.Domain, p.Username, p.Password)
+	if err != nil {
+		return fmt.Errorf("appleservices: %w", err)
+	}
+	if err := pv.addRestoredItem(cred); err != nil {
+		return fmt.Errorf("appleservices: restore web password (recreate credential): %w", err)
+	}
+	if p.Note != "" || (!p.Website && p.Name != "") {
+		meta, err := keychain.EncodeMetadataItem(p.Domain, p.Username, p.Name, p.Note)
+		if err != nil {
+			return fmt.Errorf("appleservices: %w", err)
+		}
+		if err := pv.addRestoredItem(meta); err != nil {
+			return fmt.Errorf("appleservices: restore web password (recreate metadata): %w", err)
+		}
+	}
+	for _, ref := range p.Deleted {
+		if _, err := pv.v.DeleteRecord("Passwords", ref.RecordName, ref.RecordEtag); err != nil {
+			return fmt.Errorf("appleservices: items restored but removing a recently-deleted record (%s) failed (retry RestoreWebPassword or PurgeWebPassword to clear it): %w", ref.RecordName, err)
+		}
+	}
+	return nil
+}
+
+func (pv *KeychainVault) addRestoredItem(attrs []byte) error {
+	_, _, err := pv.v.AddItem("Passwords", attrs)
+	if se, ok := errors.AsType[*cloudkit.SaveError](err); ok && se.AlreadyExists() {
+		return nil
+	}
+	return err
 }
 
 func sponsorPeerID(otBottle []byte) string {
