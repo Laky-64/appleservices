@@ -46,14 +46,14 @@ func run() error {
 
 	if login.NeedsTwoFactor() {
 		fmt.Fprintln(os.Stderr, "Two-factor authentication required; requesting a trusted-device code ...")
-		if err := login.RequestCode(); err != nil {
+		if err := login.RequestCode(appleservices.TrustedDevice); err != nil {
 			return fmt.Errorf("request code: %w", err)
 		}
 		code, err := promptCode()
 		if err != nil {
 			return err
 		}
-		if err := login.SubmitCode(code); err != nil {
+		if err := login.SubmitCode(appleservices.TrustedDevice, code); err != nil {
 			return fmt.Errorf("submit code: %w", err)
 		}
 	}

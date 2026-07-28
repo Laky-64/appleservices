@@ -28,6 +28,8 @@ type loginBackend interface {
 	Login(username, password string) (*gsa.LoginResult, error)
 	RequestTrustedDeviceCode(dsid, idmsToken string) error
 	SubmitTrustedDeviceCode(dsid, idmsToken, code string) error
+	RequestSMSCode(dsid, idmsToken string) error
+	SubmitSMSCode(dsid, idmsToken, code string) error
 	Snapshot(dsid string, tokens map[string]string) (gsa.Session, error)
 }
 
@@ -133,23 +135,50 @@ func (l *Login) persistDevice() error {
 
 func (l *Login) NeedsTwoFactor() bool { return l.needsTwoFactor }
 
-func (l *Login) RequestCode() error {
+type TwoFactorMethod int
+
+const (
+	TrustedDevice TwoFactorMethod = iota
+	SMS
+)
+
+func (l *Login) RequestCode(method TwoFactorMethod) error {
 	if !l.needsTwoFactor {
 		return errors.New("appleservices: no two-factor challenge is pending")
 	}
 	if l.adsid == "" || l.idmsToken == "" {
 		return errors.New("appleservices: two-factor challenge missing adsid/GsIdmsToken")
 	}
-	return l.backend.RequestTrustedDeviceCode(l.adsid, l.idmsToken)
+	switch method {
+	case TrustedDevice:
+		return l.backend.RequestTrustedDeviceCode(l.adsid, l.idmsToken)
+	case SMS:
+		return l.backend.RequestSMSCode(l.adsid, l.idmsToken)
+	default:
+		return fmt.Errorf("appleservices: unknown two-factor method %d", method)
+	}
 }
 
-func (l *Login) SubmitCode(code string) error {
+func (l *Login) SubmitCode(method TwoFactorMethod, code string) error {
 	if !l.needsTwoFactor {
 		return errors.New("appleservices: no two-factor challenge is pending")
 	}
-	if err := l.backend.SubmitTrustedDeviceCode(l.adsid, l.idmsToken, code); err != nil {
+	var err error
+	switch method {
+	case TrustedDevice:
+		err = l.backend.SubmitTrustedDeviceCode(l.adsid, l.idmsToken, code)
+	case SMS:
+		err = l.backend.SubmitSMSCode(l.adsid, l.idmsToken, code)
+	default:
+		return fmt.Errorf("appleservices: unknown two-factor method %d", method)
+	}
+	if err != nil {
 		return fmt.Errorf("appleservices: submit code: %w", err)
 	}
+	return l.finishTwoFactor()
+}
+
+func (l *Login) finishTwoFactor() error {
 	res, err := l.backend.Login(l.creds.AppleID, l.creds.Password)
 	if err != nil {
 		return fmt.Errorf("appleservices: re-login after 2FA: %w", err)
