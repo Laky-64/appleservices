@@ -95,14 +95,39 @@ func encodeRecord(r Record, zone, owner string) []byte {
 const uploadTag = "appleservices"
 
 func EncodeItemRecord(zoneName, owner string, classCKey []byte, classCUUID string, attrs []byte) (itemUUID string, recordSaveRequest []byte, err error) {
-	if len(classCKey) != KeyLen {
-		return "", nil, fmt.Errorf("ckks: classC key length %d, want %d", len(classCKey), KeyLen)
-	}
 	itemUUID = uuid.New()
+	record, err := buildItemRecord(zoneName, owner, classCKey, classCUUID, itemUUID, attrs)
+	if err != nil {
+		return "", nil, err
+	}
+	req := protobuf.NewWriter()
+	req.WriteBytes(1, record)
+	req.WriteVarint(6, 2)
+	return itemUUID, req.Bytes(), nil
+}
+
+func EncodeItemRecordUpdate(zoneName, owner string, classCKey []byte, classCUUID, itemUUID, etag string, attrs []byte) ([]byte, error) {
+	record, err := buildItemRecord(zoneName, owner, classCKey, classCUUID, itemUUID, attrs)
+	if err != nil {
+		return nil, err
+	}
+	req := protobuf.NewWriter()
+	req.WriteBytes(1, record)
+	if etag != "" {
+		req.WriteBytes(4, []byte(etag))
+	}
+	req.WriteVarint(6, 3)
+	return req.Bytes(), nil
+}
+
+func buildItemRecord(zoneName, owner string, classCKey []byte, classCUUID, itemUUID string, attrs []byte) ([]byte, error) {
+	if len(classCKey) != KeyLen {
+		return nil, fmt.Errorf("ckks: classC key length %d, want %d", len(classCKey), KeyLen)
+	}
 
 	itemKey := make([]byte, KeyLen)
 	if _, err := rand.Read(itemKey); err != nil {
-		return "", nil, fmt.Errorf("ckks: item key: %w", err)
+		return nil, fmt.Errorf("ckks: item key: %w", err)
 	}
 
 	parentRef := encodeReference(classCUUID, zoneName, owner)
@@ -118,16 +143,16 @@ func EncodeItemRecord(zoneName, owner string, classCKey []byte, classCUUID strin
 	}
 	aad, err := buildItemAAD(rec)
 	if err != nil {
-		return "", nil, err
+		return nil, err
 	}
 
 	data, err := EncryptItem(itemKey, padItem(attrs), aad)
 	if err != nil {
-		return "", nil, fmt.Errorf("ckks: encrypt item: %w", err)
+		return nil, fmt.Errorf("ckks: encrypt item: %w", err)
 	}
 	wrapped, err := WrapKey(classCKey, itemKey)
 	if err != nil {
-		return "", nil, fmt.Errorf("ckks: wrap item key: %w", err)
+		return nil, fmt.Errorf("ckks: wrap item key: %w", err)
 	}
 
 	rec.Fields["data"] = CKValue{Type: 1, Bytes: data}
@@ -136,12 +161,7 @@ func EncodeItemRecord(zoneName, owner string, classCKey []byte, classCUUID strin
 	rec.Fields["server_wascurrent"] = CKValue{Type: 7, Int: 0}
 	rec.Fields["server_suggestDeletion"] = CKValue{Type: 7, Int: 0}
 
-	record := encodeRecord(rec, zoneName, owner)
-
-	req := protobuf.NewWriter()
-	req.WriteBytes(1, record)
-	req.WriteVarint(6, 2)
-	return itemUUID, req.Bytes(), nil
+	return encodeRecord(rec, zoneName, owner), nil
 }
 
 func EncodeRecordDelete(recordName, zone, owner, etag string) []byte {
@@ -177,6 +197,31 @@ func (v *Vault) AddItem(view string, attrs []byte) (itemUUID string, sr cloudkit
 	}
 	sr, err = v.ck.RecordSave(req)
 	return itemUUID, sr, err
+}
+
+func (v *Vault) UpdateItem(view, recordName, etag string, attrs []byte) (cloudkit.SaveResult, error) {
+	body, err := v.ck.RecordSyncZone(view)
+	if err != nil {
+		return cloudkit.SaveResult{}, fmt.Errorf("ckks: fetch view %q: %w", view, err)
+	}
+	records, err := ParseZone(body)
+	if err != nil {
+		return cloudkit.SaveResult{}, fmt.Errorf("ckks: parse view %q: %w", view, err)
+	}
+	zk, err := v.zoneKeysFor(view, records)
+	if err != nil {
+		return cloudkit.SaveResult{}, err
+	}
+	className := classForPdmn(pdmnOf(attrs))
+	ck, ok := zk.classes[className]
+	if !ok || len(ck.key) != KeyLen || ck.uuid == "" {
+		return cloudkit.SaveResult{}, fmt.Errorf("ckks: view %q has no %s key for writes", view, className)
+	}
+	req, err := EncodeItemRecordUpdate(view, v.ck.UserID(), ck.key, ck.uuid, recordName, etag, attrs)
+	if err != nil {
+		return cloudkit.SaveResult{}, err
+	}
+	return v.ck.RecordSave(req)
 }
 
 func pdmnOf(attrs []byte) string {

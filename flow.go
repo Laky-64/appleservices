@@ -645,6 +645,120 @@ func (pv *KeychainVault) DeleteWebPassword(p keychain.WebPassword) error {
 	return nil
 }
 
+func (pv *KeychainVault) EditWebPassword(p keychain.WebPassword, newDomain, newUsername, newPassword string) error {
+	if p.IsDeleted {
+		return fmt.Errorf("appleservices: EditWebPassword: %q is deleted; restore it first", p.Domain)
+	}
+	if newDomain == "" || newUsername == "" {
+		return fmt.Errorf("appleservices: EditWebPassword: domain and username must be non-empty")
+	}
+	items, err := pv.v.Items("Passwords")
+	if err != nil {
+		return fmt.Errorf("appleservices: edit web password: %w", err)
+	}
+	var credUpdated bool
+	for _, it := range items {
+		if it.Class == "inet" && it.Agrp == "com.apple.cfnetwork" && it.Srvr == p.Domain && it.Acct == p.Username {
+			blob, err := keychain.EncodeItemRenamed(it.Attrs, newDomain, newUsername, []byte(newPassword))
+			if err != nil {
+				return fmt.Errorf("appleservices: %w", err)
+			}
+			if _, err := pv.v.UpdateItem("Passwords", it.Name, it.Etag, blob); err != nil {
+				return fmt.Errorf("appleservices: edit web password: %w", err)
+			}
+			credUpdated = true
+			break
+		}
+	}
+	if !credUpdated {
+		return fmt.Errorf("appleservices: EditWebPassword: no active entry for %q (%s)", p.Domain, p.Username)
+	}
+	for _, it := range items {
+		if it.Agrp == "com.apple.password-manager" && it.Srvr == p.Domain && it.Acct == p.Username {
+			inner := keychain.DecodeCompanionInner(it.Data)
+			if inner == nil {
+				inner = map[string]any{}
+			}
+			blob, err := keychain.EncodeCompanionItem(newDomain, newUsername, inner)
+			if err != nil {
+				return fmt.Errorf("appleservices: %w", err)
+			}
+			if _, err := pv.v.UpdateItem("Passwords", it.Name, it.Etag, blob); err != nil {
+				return fmt.Errorf("appleservices: edit web password (rename companion): %w", err)
+			}
+			break
+		}
+	}
+	return nil
+}
+
+func (pv *KeychainVault) SetTOTP(p keychain.WebPassword, otpauthURL string) error {
+	if p.IsDeleted {
+		return fmt.Errorf("appleservices: SetTOTP: %q is deleted; restore it first", p.Domain)
+	}
+	totp, err := keychain.EncodeTOTPField(otpauthURL)
+	if err != nil {
+		return fmt.Errorf("appleservices: %w", err)
+	}
+	items, err := pv.v.Items("Passwords")
+	if err != nil {
+		return fmt.Errorf("appleservices: set totp: %w", err)
+	}
+	for _, it := range items {
+		if it.Agrp == "com.apple.password-manager" && it.Srvr == p.Domain && it.Acct == p.Username {
+			inner := keychain.DecodeCompanionInner(it.Data)
+			if inner == nil {
+				inner = map[string]any{}
+			}
+			inner["totp"] = totp
+			blob, err := keychain.EncodeCompanionItem(p.Domain, p.Username, inner)
+			if err != nil {
+				return fmt.Errorf("appleservices: %w", err)
+			}
+			if _, err := pv.v.UpdateItem("Passwords", it.Name, it.Etag, blob); err != nil {
+				return fmt.Errorf("appleservices: set totp: %w", err)
+			}
+			return nil
+		}
+	}
+	blob, err := keychain.EncodeCompanionItem(p.Domain, p.Username, map[string]any{"s_as": []any{}, "totp": totp})
+	if err != nil {
+		return fmt.Errorf("appleservices: %w", err)
+	}
+	if _, _, err := pv.v.AddItem("Passwords", blob); err != nil {
+		return fmt.Errorf("appleservices: set totp (create companion): %w", err)
+	}
+	return nil
+}
+
+func (pv *KeychainVault) RemoveTOTP(p keychain.WebPassword) error {
+	if p.IsDeleted {
+		return fmt.Errorf("appleservices: RemoveTOTP: %q is deleted; restore it first", p.Domain)
+	}
+	items, err := pv.v.Items("Passwords")
+	if err != nil {
+		return fmt.Errorf("appleservices: remove totp: %w", err)
+	}
+	for _, it := range items {
+		if it.Agrp == "com.apple.password-manager" && it.Srvr == p.Domain && it.Acct == p.Username {
+			inner := keychain.DecodeCompanionInner(it.Data)
+			if inner == nil || inner["totp"] == nil {
+				return nil
+			}
+			delete(inner, "totp")
+			blob, err := keychain.EncodeCompanionItem(p.Domain, p.Username, inner)
+			if err != nil {
+				return fmt.Errorf("appleservices: %w", err)
+			}
+			if _, err := pv.v.UpdateItem("Passwords", it.Name, it.Etag, blob); err != nil {
+				return fmt.Errorf("appleservices: remove totp: %w", err)
+			}
+			return nil
+		}
+	}
+	return nil
+}
+
 func (pv *KeychainVault) PurgeWebPassword(p keychain.WebPassword) error {
 	if !p.IsDeleted || len(p.Deleted) == 0 {
 		return fmt.Errorf("appleservices: PurgeWebPassword: %q is not a deleted entry", p.Domain)

@@ -59,7 +59,7 @@ func WebPasswords(items []Item) []WebPassword {
 
 	title := func(srvr string) string {
 		for _, m := range manual {
-			if m.srvr == srvr {
+			if m.srvr == srvr && m.title != "" {
 				return m.title
 			}
 		}

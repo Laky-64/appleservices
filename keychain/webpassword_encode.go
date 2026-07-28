@@ -42,24 +42,50 @@ func EncodeWebPasswordItem(srvr, username, password string) ([]byte, error) {
 }
 
 func EncodeMetadataItem(srvr, username, title, note string) ([]byte, error) {
-	metadata := map[string]any{
+	inner := map[string]any{
 		"title": []byte(title),
 		"s_as":  []any{},
 	}
 	if note != "" {
-		metadata["notes"] = []byte(note)
+		inner["notes"] = []byte(note)
 	}
-	inner, err := plist.Marshal(metadata, plist.BinaryFormat)
+	return EncodeCompanionItem(srvr, username, inner)
+}
+
+func EncodeCompanionItem(srvr, username string, inner map[string]any) ([]byte, error) {
+	data, err := plist.Marshal(inner, plist.BinaryFormat)
 	if err != nil {
-		return nil, fmt.Errorf("keychain: encode metadata payload: %w", err)
+		return nil, fmt.Errorf("keychain: encode companion payload: %w", err)
 	}
-	attrs := inetAttrs("com.apple.password-manager", srvr, username, inner)
+	attrs := inetAttrs("com.apple.password-manager", srvr, username, data)
 	attrs["type"] = uint64(metadataType)
 	attrs["desc"] = "Password Manager Metadata"
 	attrs["labl"] = fmt.Sprintf("Password Manager Metadata: %s (%s)", srvr, username)
-	data, err := plist.Marshal(attrs, plist.BinaryFormat)
-	if err != nil {
-		return nil, fmt.Errorf("keychain: encode metadata item: %w", err)
+	return plist.Marshal(attrs, plist.BinaryFormat)
+}
+
+func DecodeCompanionInner(data []byte) map[string]any {
+	return parsePlist(data)
+}
+
+func EncodeItemWithSecret(attrs map[string]any, secret []byte) ([]byte, error) {
+	out := make(map[string]any, len(attrs))
+	for k, v := range attrs {
+		out[k] = v
 	}
-	return data, nil
+	out["v_Data"] = secret
+	delete(out, "sha1")
+	return plist.Marshal(out, plist.BinaryFormat)
+}
+
+func EncodeItemRenamed(attrs map[string]any, newSrvr, newAcct string, secret []byte) ([]byte, error) {
+	out := make(map[string]any, len(attrs))
+	for k, v := range attrs {
+		out[k] = v
+	}
+	out["srvr"] = newSrvr
+	out["acct"] = newAcct
+	out["v_Data"] = secret
+	delete(out, "sha1")
+	return plist.Marshal(out, plist.BinaryFormat)
 }
