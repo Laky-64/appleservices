@@ -4,6 +4,7 @@ import (
 	"encoding/base32"
 	"fmt"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -25,11 +26,18 @@ type WebPassword struct {
 	IsDeleted bool
 	DeletedAt time.Time
 	Deleted   []DeletedRef
+	Groups    []Group
+	Shared    bool
 }
 
 type DeletedRef struct {
 	RecordName string
 	RecordEtag string
+}
+
+type Group struct {
+	ID   string
+	Name string
 }
 
 type entryMeta struct {
@@ -42,6 +50,7 @@ type entryMeta struct {
 
 func WebPasswords(items []Item) []WebPassword {
 	var manual, website []entryMeta
+	var personal []personalRec
 	for _, it := range items {
 		switch it.Agrp {
 		case "com.apple.password-manager":
@@ -53,6 +62,17 @@ func WebPasswords(items []Item) []WebPassword {
 		case "com.apple.password-manager.website-metadata":
 			if t := asString(parsePlist(it.Data)["wn"]); t != "" {
 				website = append(website, entryMeta{srvr: it.Srvr, title: t})
+			}
+		case "com.apple.password-manager.personal":
+			d := parsePlist(it.Data)
+			if g := groupMembership(d); len(g) > 0 {
+				personal = append(personal, personalRec{
+					srvr:   it.Srvr,
+					acct:   it.Acct,
+					groups: g,
+					title:  asString(d["title"]),
+					secret: currentSecret(d["s_hi"]),
+				})
 			}
 		}
 	}
@@ -96,6 +116,14 @@ func WebPasswords(items []Item) []WebPassword {
 		}
 		return nil
 	}
+	groups := func(srvr, acct string) []Group {
+		for _, p := range personal {
+			if p.srvr == srvr && p.acct == acct {
+				return p.groups
+			}
+		}
+		return nil
+	}
 
 	var result []WebPassword
 	for _, it := range items {
@@ -112,6 +140,7 @@ func WebPasswords(items []Item) []WebPassword {
 			Password: string(it.Data),
 			TOTP:     totp(it.Srvr),
 			Note:     note(it.Srvr),
+			Groups:   groups(it.Srvr, it.Acct),
 		}
 		if cdat, ok := it.Attrs["cdat"].(time.Time); ok {
 			wp.Created = cdat
@@ -121,6 +150,27 @@ func WebPasswords(items []Item) []WebPassword {
 		}
 		result = append(result, wp)
 	}
+
+	seen := make(map[string]bool, len(result))
+	for _, r := range result {
+		seen[r.Domain+"\x00"+r.Username] = true
+	}
+	for _, p := range personal {
+		if seen[p.srvr+"\x00"+p.acct] {
+			continue
+		}
+		result = append(result, WebPassword{
+			Name:     firstNonEmpty(p.title, p.srvr),
+			Domain:   p.srvr,
+			Domains:  allDomains(p.srvr, !uuid.IsCanonical(p.srvr), nil),
+			Website:  !uuid.IsCanonical(p.srvr),
+			Username: p.acct,
+			Password: p.secret,
+			Groups:   p.groups,
+			Shared:   true,
+		})
+	}
+
 	result = append(result, deletedWebPasswords(items, title)...)
 	return result
 }
@@ -245,6 +295,97 @@ func deletedSecretAndTitle(v any) (password, title string) {
 		}
 	}
 	return password, title
+}
+
+type personalRec struct {
+	srvr, acct string
+	groups     []Group
+	title      string
+	secret     string
+}
+
+func currentSecret(v any) string {
+	arr, ok := v.([]any)
+	if !ok {
+		return ""
+	}
+	secret := ""
+	for _, e := range arr {
+		m, ok := e.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch asString(m["t"]) {
+		case "pwcr", "pwch":
+			if p := asString(m["p"]); p != "" {
+				secret = p
+			}
+		}
+	}
+	return secret
+}
+
+func groupMembership(d map[string]any) []Group {
+	arr, ok := d["s_hi"].([]any)
+	if !ok {
+		return nil
+	}
+	type state struct {
+		name   string
+		member bool
+		when   time.Time
+	}
+	latest := map[string]state{}
+	for _, e := range arr {
+		m, ok := e.(map[string]any)
+		if !ok || asString(m["t"]) != "pwshgr" {
+			continue
+		}
+		gid := asString(m["gid"])
+		if gid == "" {
+			continue
+		}
+		when, _ := m["d"].(time.Time)
+		member := !strings.Contains(strings.ToLower(asString(m["sh"])), "off")
+		if prev, ok := latest[gid]; !ok || !when.Before(prev.when) {
+			latest[gid] = state{name: asString(m["gn"]), member: member, when: when}
+		}
+	}
+	var out []Group
+	for gid, s := range latest {
+		if s.member {
+			out = append(out, Group{ID: gid, Name: s.name})
+		}
+	}
+	sortGroups(out)
+	return out
+}
+
+func Groups(items []Item) []Group {
+	byID := map[string]string{}
+	for _, it := range items {
+		if it.Agrp != "com.apple.password-manager.personal" {
+			continue
+		}
+		for _, g := range groupMembership(parsePlist(it.Data)) {
+			byID[g.ID] = g.Name
+		}
+	}
+	out := make([]Group, 0, len(byID))
+	for id, name := range byID {
+		out = append(out, Group{ID: id, Name: name})
+	}
+	sortGroups(out)
+	return out
+}
+
+func sortGroups(g []Group) {
+	sort.Slice(g, func(i, j int) bool {
+		if g[i].Name != g[j].Name {
+			return g[i].Name < g[j].Name
+		}
+		return g[i].ID < g[j].ID
+	})
 }
 
 func (w WebPassword) IconURL() string {

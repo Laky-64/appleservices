@@ -521,6 +521,14 @@ func (pv *KeychainVault) WebPasswords() ([]keychain.WebPassword, error) {
 	return keychain.WebPasswords(items), nil
 }
 
+func (pv *KeychainVault) Groups() ([]keychain.Group, error) {
+	items, err := pv.v.Items("Passwords")
+	if err != nil {
+		return nil, fmt.Errorf("appleservices: fetch Passwords view: %w", err)
+	}
+	return keychain.Groups(items), nil
+}
+
 func (pv *KeychainVault) WiFiPasswords() ([]keychain.WiFiPassword, error) {
 	items, err := pv.v.Items("WiFi")
 	if err != nil {
