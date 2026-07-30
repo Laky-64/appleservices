@@ -132,7 +132,7 @@ func run() error {
 		if pk.IsDeleted {
 			kind = "deleted-passkey"
 		}
-		fmt.Printf("[%s] %s\t%s\t%s\n", kind, pk.RelyingParty, pk.UserName, pk.DisplayName)
+		fmt.Printf("[%s] %s\t%s\t%s\t%s\n", kind, pk.Title, pk.RelyingParty, pk.UserName, pk.DisplayName)
 	}
 	return nil
 }

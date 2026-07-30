@@ -7,11 +7,14 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"strings"
 	"time"
+	"unicode"
 )
 
 type Passkey struct {
 	RelyingParty string
+	Title        string
 	UserName     string
 	DisplayName  string
 	CredentialID []byte
@@ -25,6 +28,7 @@ type Passkey struct {
 }
 
 func Passkeys(items []Item) []Passkey {
+	wn := websiteNames(items)
 	var result []Passkey
 	for _, it := range items {
 		deleted := it.Agrp == "com.apple.webkit.webauthn-recently-deleted"
@@ -39,6 +43,7 @@ func Passkeys(items []Item) []Passkey {
 		userHandle, userName, displayName := parseAtagCredential(atag)
 		pk := Passkey{
 			RelyingParty: it.Labl,
+			Title:        siteTitle(it.Labl, wn),
 			UserName:     userName,
 			DisplayName:  displayName,
 			CredentialID: asBytes(it.Attrs["alis"]),
@@ -59,6 +64,39 @@ func Passkeys(items []Item) []Passkey {
 		result = append(result, pk)
 	}
 	return result
+}
+
+func websiteNames(items []Item) map[string]string {
+	out := map[string]string{}
+	for _, it := range items {
+		if it.Agrp != "com.apple.password-manager.website-metadata" {
+			continue
+		}
+		if wn := asString(parsePlist(it.Data)["wn"]); wn != "" {
+			out[it.Srvr] = wn
+		}
+	}
+	return out
+}
+
+func siteTitle(rp string, wn map[string]string) string {
+	if rp == "" {
+		return ""
+	}
+	if t := wn[rp]; t != "" {
+		return t
+	}
+	labels := strings.Split(rp, ".")
+	label := rp
+	if len(labels) >= 2 {
+		label = labels[len(labels)-2]
+	}
+	if label == "" {
+		return rp
+	}
+	r := []rune(label)
+	r[0] = unicode.ToUpper(r[0])
+	return string(r)
 }
 
 func asBytes(v any) []byte {
