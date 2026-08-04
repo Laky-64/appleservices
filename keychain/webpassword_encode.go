@@ -52,10 +52,18 @@ func EncodeMetadataItem(srvr, username, title, note string) ([]byte, error) {
 	return EncodeCompanionItem(srvr, username, inner)
 }
 
-func EncodeCompanionItem(srvr, username string, inner map[string]any) ([]byte, error) {
+func EncodeCompanionInner(inner map[string]any) ([]byte, error) {
 	data, err := plist.Marshal(inner, plist.BinaryFormat)
 	if err != nil {
 		return nil, fmt.Errorf("keychain: encode companion payload: %w", err)
+	}
+	return data, nil
+}
+
+func EncodeCompanionItem(srvr, username string, inner map[string]any) ([]byte, error) {
+	data, err := EncodeCompanionInner(inner)
+	if err != nil {
+		return nil, err
 	}
 	attrs := inetAttrs("com.apple.password-manager", srvr, username, data)
 	attrs["type"] = uint64(metadataType)

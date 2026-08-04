@@ -513,6 +513,14 @@ func (c *Client) OpenKeychain(ref BottleRef, passcode string) (*KeychainVault, e
 	return &KeychainVault{v: v}, nil
 }
 
+func (pv *KeychainVault) Items() ([]keychain.Item, error) {
+	items, err := pv.v.Items("Passwords")
+	if err != nil {
+		return nil, fmt.Errorf("appleservices: fetch Passwords view: %w", err)
+	}
+	return items, nil
+}
+
 func (pv *KeychainVault) WebPasswords() ([]keychain.WebPassword, error) {
 	items, err := pv.v.Items("Passwords")
 	if err != nil {
@@ -604,8 +612,13 @@ func (pv *KeychainVault) AddWebPassword(domain, username, password, note string)
 }
 
 func (pv *KeychainVault) AddManualPassword(title, username, password, note string) error {
-	id := uuid.New()
+	return pv.AddManualPasswordWithID(uuid.New(), title, username, password, note)
+}
 
+func (pv *KeychainVault) AddManualPasswordWithID(id, title, username, password, note string) error {
+	if !uuid.IsCanonical(id) {
+		return fmt.Errorf("appleservices: AddManualPassword: %q is not a canonical UUID", id)
+	}
 	cred, err := keychain.EncodeWebPasswordItem(id, username, password)
 	if err != nil {
 		return fmt.Errorf("appleservices: %w", err)
@@ -654,25 +667,39 @@ func (pv *KeychainVault) DeleteWebPassword(p keychain.WebPassword) error {
 }
 
 func (pv *KeychainVault) EditWebPassword(p keychain.WebPassword, newDomain, newUsername, newPassword string) error {
+	items, err := pv.v.Items("Passwords")
+	if err != nil {
+		return fmt.Errorf("appleservices: edit web password: %w", err)
+	}
+	return pv.EditWebPasswordIn(items, p, newDomain, newUsername, newPassword)
+}
+
+func (pv *KeychainVault) EditWebPasswordIn(items []keychain.Item, p keychain.WebPassword, newDomain, newUsername, newPassword string) error {
 	if p.IsDeleted {
 		return fmt.Errorf("appleservices: EditWebPassword: %q is deleted; restore it first", p.Domain)
 	}
 	if newDomain == "" || newUsername == "" {
 		return fmt.Errorf("appleservices: EditWebPassword: domain and username must be non-empty")
 	}
-	items, err := pv.v.Items("Passwords")
-	if err != nil {
-		return fmt.Errorf("appleservices: edit web password: %w", err)
-	}
 	var credUpdated bool
-	for _, it := range items {
+	for i, it := range items {
 		if it.Class == "inet" && it.Agrp == "com.apple.cfnetwork" && it.Srvr == p.Domain && it.Acct == p.Username {
 			blob, err := keychain.EncodeItemRenamed(it.Attrs, newDomain, newUsername, []byte(newPassword))
 			if err != nil {
 				return fmt.Errorf("appleservices: %w", err)
 			}
-			if _, err := pv.v.UpdateItem("Passwords", it.Name, it.Etag, blob); err != nil {
+			sr, err := pv.v.UpdateItem("Passwords", it.Name, it.Etag, blob)
+			if err != nil {
 				return fmt.Errorf("appleservices: edit web password: %w", err)
+			}
+			items[i].Srvr = newDomain
+			items[i].Acct = newUsername
+			items[i].Data = []byte(newPassword)
+			items[i].Etag = sr.Etag
+			if items[i].Attrs != nil {
+				items[i].Attrs["srvr"] = newDomain
+				items[i].Attrs["acct"] = newUsername
+				items[i].Attrs["v_Data"] = []byte(newPassword)
 			}
 			credUpdated = true
 			break
@@ -681,89 +708,134 @@ func (pv *KeychainVault) EditWebPassword(p keychain.WebPassword, newDomain, newU
 	if !credUpdated {
 		return fmt.Errorf("appleservices: EditWebPassword: no active entry for %q (%s)", p.Domain, p.Username)
 	}
-	for _, it := range items {
-		if it.Agrp == "com.apple.password-manager" && it.Srvr == p.Domain && it.Acct == p.Username {
-			inner := keychain.DecodeCompanionInner(it.Data)
-			if inner == nil {
-				inner = map[string]any{}
-			}
-			blob, err := keychain.EncodeCompanionItem(newDomain, newUsername, inner)
-			if err != nil {
-				return fmt.Errorf("appleservices: %w", err)
-			}
-			if _, err := pv.v.UpdateItem("Passwords", it.Name, it.Etag, blob); err != nil {
-				return fmt.Errorf("appleservices: edit web password (rename companion): %w", err)
-			}
-			break
+	if newDomain == p.Domain && newUsername == p.Username {
+		return nil
+	}
+	if i := companionIndex(items, p.Domain, p.Username); i >= 0 {
+		inner := keychain.DecodeCompanionInner(items[i].Data)
+		if inner == nil {
+			inner = map[string]any{}
+		}
+		if err := pv.writeCompanion(items, i, newDomain, newUsername, inner); err != nil {
+			return fmt.Errorf("appleservices: edit web password (rename companion): %w", err)
 		}
 	}
 	return nil
 }
 
-func (pv *KeychainVault) SetTOTP(p keychain.WebPassword, otpauthURL string) error {
-	if p.IsDeleted {
-		return fmt.Errorf("appleservices: SetTOTP: %q is deleted; restore it first", p.Domain)
-	}
-	totp, err := keychain.EncodeTOTPField(otpauthURL)
-	if err != nil {
-		return fmt.Errorf("appleservices: %w", err)
-	}
+type Metadata struct {
+	Title string
+	Note  string
+	TOTP  string
+}
+
+func (pv *KeychainVault) SetMetadata(p keychain.WebPassword, m Metadata) error {
 	items, err := pv.v.Items("Passwords")
 	if err != nil {
-		return fmt.Errorf("appleservices: set totp: %w", err)
+		return fmt.Errorf("appleservices: set metadata: %w", err)
 	}
-	for _, it := range items {
-		if it.Agrp == "com.apple.password-manager" && it.Srvr == p.Domain && it.Acct == p.Username {
-			inner := keychain.DecodeCompanionInner(it.Data)
-			if inner == nil {
-				inner = map[string]any{}
-			}
-			inner["totp"] = totp
-			blob, err := keychain.EncodeCompanionItem(p.Domain, p.Username, inner)
-			if err != nil {
-				return fmt.Errorf("appleservices: %w", err)
-			}
-			if _, err := pv.v.UpdateItem("Passwords", it.Name, it.Etag, blob); err != nil {
-				return fmt.Errorf("appleservices: set totp: %w", err)
-			}
+	return pv.SetMetadataIn(items, p, m)
+}
+
+func (pv *KeychainVault) SetMetadataIn(items []keychain.Item, p keychain.WebPassword, m Metadata) error {
+	return pv.setMetadata(items, p, m, "SetMetadata")
+}
+
+func (pv *KeychainVault) SetTitleIn(items []keychain.Item, p keychain.WebPassword, title string) error {
+	return pv.setMetadata(items, p, Metadata{Title: title, Note: p.Note, TOTP: p.TOTP}, "SetTitle")
+}
+
+func (pv *KeychainVault) setMetadata(items []keychain.Item, p keychain.WebPassword, m Metadata, what string) error {
+	if p.IsDeleted {
+		return fmt.Errorf("appleservices: %s: %q is deleted; restore it first", what, p.Domain)
+	}
+	var totp map[string]any
+	if m.TOTP != "" {
+		encoded, err := keychain.EncodeTOTPField(m.TOTP)
+		if err != nil {
+			return fmt.Errorf("appleservices: %w", err)
+		}
+		totp = encoded
+	}
+
+	i := companionIndex(items, p.Domain, p.Username)
+	if i < 0 {
+		inner := map[string]any{"s_as": []any{}}
+		if !p.Website && p.Name != "" {
+			inner["title"] = []byte(p.Name)
+		}
+		if !applyMetadata(inner, m, totp) {
 			return nil
 		}
+		blob, err := keychain.EncodeCompanionItem(p.Domain, p.Username, inner)
+		if err != nil {
+			return fmt.Errorf("appleservices: %w", err)
+		}
+		if _, _, err := pv.v.AddItem("Passwords", blob); err != nil {
+			return fmt.Errorf("appleservices: %s (create companion): %w", what, err)
+		}
+		return nil
 	}
-	blob, err := keychain.EncodeCompanionItem(p.Domain, p.Username, map[string]any{"s_as": []any{}, "totp": totp})
-	if err != nil {
-		return fmt.Errorf("appleservices: %w", err)
+
+	inner := keychain.DecodeCompanionInner(items[i].Data)
+	if inner == nil {
+		inner = map[string]any{}
 	}
-	if _, _, err := pv.v.AddItem("Passwords", blob); err != nil {
-		return fmt.Errorf("appleservices: set totp (create companion): %w", err)
+	if !applyMetadata(inner, m, totp) {
+		return nil
+	}
+	if err := pv.writeCompanion(items, i, p.Domain, p.Username, inner); err != nil {
+		return fmt.Errorf("appleservices: %s: %w", what, err)
 	}
 	return nil
 }
 
-func (pv *KeychainVault) RemoveTOTP(p keychain.WebPassword) error {
-	if p.IsDeleted {
-		return fmt.Errorf("appleservices: RemoveTOTP: %q is deleted; restore it first", p.Domain)
+func applyMetadata(inner map[string]any, m Metadata, totp map[string]any) bool {
+	title, note, otpauth := keychain.CompanionMetadata(inner)
+	changed := false
+	set := func(key, want, have string, value any) {
+		if want == have {
+			return
+		}
+		if want == "" {
+			delete(inner, key)
+		} else {
+			inner[key] = value
+		}
+		changed = true
 	}
-	items, err := pv.v.Items("Passwords")
-	if err != nil {
-		return fmt.Errorf("appleservices: remove totp: %w", err)
-	}
-	for _, it := range items {
-		if it.Agrp == "com.apple.password-manager" && it.Srvr == p.Domain && it.Acct == p.Username {
-			inner := keychain.DecodeCompanionInner(it.Data)
-			if inner == nil || inner["totp"] == nil {
-				return nil
-			}
-			delete(inner, "totp")
-			blob, err := keychain.EncodeCompanionItem(p.Domain, p.Username, inner)
-			if err != nil {
-				return fmt.Errorf("appleservices: %w", err)
-			}
-			if _, err := pv.v.UpdateItem("Passwords", it.Name, it.Etag, blob); err != nil {
-				return fmt.Errorf("appleservices: remove totp: %w", err)
-			}
-			return nil
+	set("title", m.Title, title, []byte(m.Title))
+	set("notes", m.Note, note, []byte(m.Note))
+	set("totp", m.TOTP, otpauth, totp)
+	return changed
+}
+
+func companionIndex(items []keychain.Item, srvr, acct string) int {
+	for i, it := range items {
+		if it.Agrp == "com.apple.password-manager" && it.Srvr == srvr && it.Acct == acct {
+			return i
 		}
 	}
+	return -1
+}
+
+func (pv *KeychainVault) writeCompanion(items []keychain.Item, i int, srvr, acct string, inner map[string]any) error {
+	data, err := keychain.EncodeCompanionInner(inner)
+	if err != nil {
+		return err
+	}
+	blob, err := keychain.EncodeCompanionItem(srvr, acct, inner)
+	if err != nil {
+		return err
+	}
+	sr, err := pv.v.UpdateItem("Passwords", items[i].Name, items[i].Etag, blob)
+	if err != nil {
+		return err
+	}
+	items[i].Srvr = srvr
+	items[i].Acct = acct
+	items[i].Data = data
+	items[i].Etag = sr.Etag
 	return nil
 }
 

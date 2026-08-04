@@ -174,15 +174,7 @@ func EncodeRecordDelete(recordName, zone, owner, etag string) []byte {
 }
 
 func (v *Vault) AddItem(view string, attrs []byte) (itemUUID string, sr cloudkit.SaveResult, err error) {
-	body, err := v.ck.RecordSyncZone(view)
-	if err != nil {
-		return "", cloudkit.SaveResult{}, fmt.Errorf("ckks: fetch view %q: %w", view, err)
-	}
-	records, err := ParseZone(body)
-	if err != nil {
-		return "", cloudkit.SaveResult{}, fmt.Errorf("ckks: parse view %q: %w", view, err)
-	}
-	zk, err := v.zoneKeysFor(view, records)
+	zk, err := v.writeKeys(view)
 	if err != nil {
 		return "", cloudkit.SaveResult{}, err
 	}
@@ -200,15 +192,7 @@ func (v *Vault) AddItem(view string, attrs []byte) (itemUUID string, sr cloudkit
 }
 
 func (v *Vault) UpdateItem(view, recordName, etag string, attrs []byte) (cloudkit.SaveResult, error) {
-	body, err := v.ck.RecordSyncZone(view)
-	if err != nil {
-		return cloudkit.SaveResult{}, fmt.Errorf("ckks: fetch view %q: %w", view, err)
-	}
-	records, err := ParseZone(body)
-	if err != nil {
-		return cloudkit.SaveResult{}, fmt.Errorf("ckks: parse view %q: %w", view, err)
-	}
-	zk, err := v.zoneKeysFor(view, records)
+	zk, err := v.writeKeys(view)
 	if err != nil {
 		return cloudkit.SaveResult{}, err
 	}
@@ -222,6 +206,25 @@ func (v *Vault) UpdateItem(view, recordName, etag string, attrs []byte) (cloudki
 		return cloudkit.SaveResult{}, err
 	}
 	return v.ck.RecordSave(req)
+}
+
+func (v *Vault) writeKeys(view string) (*zoneKeys, error) {
+	v.mu.Lock()
+	zk, ok := v.zones[view]
+	v.mu.Unlock()
+	if ok {
+		return zk, nil
+	}
+
+	body, err := v.ck.RecordSyncZone(view)
+	if err != nil {
+		return nil, fmt.Errorf("ckks: fetch view %q: %w", view, err)
+	}
+	records, err := ParseZone(body)
+	if err != nil {
+		return nil, fmt.Errorf("ckks: parse view %q: %w", view, err)
+	}
+	return v.zoneKeysFor(view, records)
 }
 
 func pdmnOf(attrs []byte) string {

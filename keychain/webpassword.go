@@ -42,10 +42,33 @@ type Group struct {
 
 type entryMeta struct {
 	srvr    string
+	acct    string
 	title   string
 	totp    string
 	note    string
 	domains []string
+}
+
+func companionFor(metas []entryMeta, srvr, acct string) entryMeta {
+	var shared, a entryMeta
+	var hasShared, hasAny bool
+	for _, m := range metas {
+		if m.srvr != srvr {
+			continue
+		}
+		switch {
+		case m.acct == acct:
+			return m
+		case m.acct == "" && !hasShared:
+			shared, hasShared = m, true
+		case !hasAny:
+			a, hasAny = m, true
+		}
+	}
+	if hasShared {
+		return shared
+	}
+	return a
 }
 
 func WebPasswords(items []Item) []WebPassword {
@@ -55,7 +78,7 @@ func WebPasswords(items []Item) []WebPassword {
 		switch it.Agrp {
 		case "com.apple.password-manager":
 			dict := parsePlist(it.Data)
-			m := entryMeta{srvr: it.Srvr, title: asString(dict["title"]), totp: totpURL(dict["totp"]), note: asString(dict["notes"]), domains: siteAssociations(dict["s_as"])}
+			m := entryMeta{srvr: it.Srvr, acct: it.Acct, title: asString(dict["title"]), totp: totpURL(dict["totp"]), note: asString(dict["notes"]), domains: siteAssociations(dict["s_as"])}
 			if m.title != "" || m.totp != "" || m.note != "" || len(m.domains) > 0 {
 				manual = append(manual, m)
 			}
@@ -77,7 +100,10 @@ func WebPasswords(items []Item) []WebPassword {
 		}
 	}
 
-	title := func(srvr string) string {
+	title := func(srvr, acct string) string {
+		if t := companionFor(manual, srvr, acct).title; t != "" {
+			return t
+		}
 		for _, m := range manual {
 			if m.srvr == srvr && m.title != "" {
 				return m.title
@@ -89,32 +115,6 @@ func WebPasswords(items []Item) []WebPassword {
 			}
 		}
 		return ""
-	}
-	totp := func(srvr string) string {
-		for _, m := range manual {
-			if m.srvr == srvr {
-				return m.totp
-			}
-		}
-		return ""
-	}
-
-	note := func(srvr string) string {
-		for _, m := range manual {
-			if m.srvr == srvr {
-				return m.note
-			}
-		}
-		return ""
-	}
-
-	associated := func(srvr string) []string {
-		for _, m := range manual {
-			if m.srvr == srvr {
-				return m.domains
-			}
-		}
-		return nil
 	}
 	groups := func(srvr, acct string) []Group {
 		for _, p := range personal {
@@ -130,16 +130,17 @@ func WebPasswords(items []Item) []WebPassword {
 		if it.Class != "inet" || it.Agrp != "com.apple.cfnetwork" {
 			continue
 		}
-		website := !uuid.IsCanonical(it.Srvr)
+		w := !uuid.IsCanonical(it.Srvr)
+		companion := companionFor(manual, it.Srvr, it.Acct)
 		wp := WebPassword{
-			Name:     title(it.Srvr),
+			Name:     title(it.Srvr, it.Acct),
 			Domain:   it.Srvr,
-			Domains:  allDomains(it.Srvr, website, associated(it.Srvr)),
-			Website:  website,
+			Domains:  allDomains(it.Srvr, w, companion.domains),
+			Website:  w,
 			Username: it.Acct,
 			Password: string(it.Data),
-			TOTP:     totp(it.Srvr),
-			Note:     note(it.Srvr),
+			TOTP:     companion.totp,
+			Note:     companion.note,
 			Groups:   groups(it.Srvr, it.Acct),
 		}
 		if cdat, ok := it.Attrs["cdat"].(time.Time); ok {
@@ -175,7 +176,7 @@ func WebPasswords(items []Item) []WebPassword {
 	return result
 }
 
-func deletedWebPasswords(items []Item, resolveTitle func(srvr string) string) []WebPassword {
+func deletedWebPasswords(items []Item, resolveTitle func(srvr, acct string) string) []WebPassword {
 	key := func(srvr, acct string) string { return srvr + "\x00" + acct }
 
 	type companion struct {
@@ -206,7 +207,7 @@ func deletedWebPasswords(items []Item, resolveTitle func(srvr string) string) []
 		c := companions[k]
 		title := c.title
 		if title == "" {
-			title = resolveTitle(it.Srvr)
+			title = resolveTitle(it.Srvr, it.Acct)
 		}
 		refs := []DeletedRef{{RecordName: it.Name, RecordEtag: it.Etag}}
 		if c.ref.RecordName != "" {
@@ -239,7 +240,7 @@ func deletedWebPasswords(items []Item, resolveTitle func(srvr string) string) []
 		}
 		pw, title := deletedSecretAndTitle(parsePlist(it.Data)["s_hi"])
 		if title == "" {
-			title = resolveTitle(it.Srvr)
+			title = resolveTitle(it.Srvr, it.Acct)
 		}
 		wp := WebPassword{
 			Name:      title,
@@ -459,6 +460,10 @@ func parsePlist(data []byte) map[string]any {
 		return nil
 	}
 	return dict
+}
+
+func CompanionMetadata(inner map[string]any) (title, note, totp string) {
+	return asString(inner["title"]), asString(inner["notes"]), totpURL(inner["totp"])
 }
 
 func asString(v any) string {
