@@ -180,8 +180,9 @@ func deletedWebPasswords(items []Item, resolveTitle func(srvr, acct string) stri
 	key := func(srvr, acct string) string { return srvr + "\x00" + acct }
 
 	type companion struct {
-		title, note string
-		ref         DeletedRef
+		title, note, totp string
+		domains           []string
+		ref               DeletedRef
 	}
 	companions := map[string]companion{}
 	for _, it := range items {
@@ -190,9 +191,11 @@ func deletedWebPasswords(items []Item, resolveTitle func(srvr, acct string) stri
 		}
 		d := parsePlist(it.Data)
 		companions[key(it.Srvr, it.Acct)] = companion{
-			title: firstNonEmpty(asString(d["title"]), sHiTitle(d["s_hi"])),
-			note:  asString(d["notes"]),
-			ref:   DeletedRef{RecordName: it.Name, RecordEtag: it.Etag},
+			title:   firstNonEmpty(asString(d["title"]), sHiTitle(d["s_hi"])),
+			note:    asString(d["notes"]),
+			totp:    totpURL(d["totp"]),
+			domains: siteAssociations(d["s_as"]),
+			ref:     DeletedRef{RecordName: it.Name, RecordEtag: it.Etag},
 		}
 	}
 
@@ -213,17 +216,24 @@ func deletedWebPasswords(items []Item, resolveTitle func(srvr, acct string) stri
 		if c.ref.RecordName != "" {
 			refs = append(refs, c.ref)
 		}
+		w := !uuid.IsCanonical(it.Srvr)
 		wp := WebPassword{
 			Name:      title,
 			Domain:    it.Srvr,
-			Website:   !uuid.IsCanonical(it.Srvr),
+			Domains:   allDomains(it.Srvr, w, c.domains),
+			Website:   w,
 			Username:  it.Acct,
 			Password:  string(it.Data),
+			TOTP:      c.totp,
 			Note:      c.note,
 			IsDeleted: true,
 			Deleted:   refs,
 		}
+		if cdat, ok := it.Attrs["cdat"].(time.Time); ok {
+			wp.Created = cdat
+		}
 		if mdat, ok := it.Attrs["mdat"].(time.Time); ok {
+			wp.Modified = mdat
 			wp.DeletedAt = mdat
 		}
 		out = append(out, wp)
@@ -251,7 +261,11 @@ func deletedWebPasswords(items []Item, resolveTitle func(srvr, acct string) stri
 			IsDeleted: true,
 			Deleted:   []DeletedRef{{RecordName: it.Name, RecordEtag: it.Etag}},
 		}
+		if cdat, ok := it.Attrs["cdat"].(time.Time); ok {
+			wp.Created = cdat
+		}
 		if mdat, ok := it.Attrs["mdat"].(time.Time); ok {
+			wp.Modified = mdat
 			wp.DeletedAt = mdat
 		}
 		out = append(out, wp)

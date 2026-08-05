@@ -1002,11 +1002,11 @@ func (pv *KeychainVault) RestoreWebPassword(p keychain.WebPassword) error {
 	if err := pv.addRestoredItem(cred); err != nil {
 		return fmt.Errorf("appleservices: restore web password (recreate credential): %w", err)
 	}
-	if p.Note != "" || (!p.Website && p.Name != "") {
-		meta, err := keychain.EncodeMetadataItem(p.Domain, p.Username, p.Name, p.Note)
-		if err != nil {
-			return fmt.Errorf("appleservices: %w", err)
-		}
+	meta, err := pv.restoredCompanion(p)
+	if err != nil {
+		return err
+	}
+	if meta != nil {
 		if err := pv.addRestoredItem(meta); err != nil {
 			return fmt.Errorf("appleservices: restore web password (recreate metadata): %w", err)
 		}
@@ -1021,6 +1021,33 @@ func (pv *KeychainVault) RestoreWebPassword(p keychain.WebPassword) error {
 		}
 	}
 	return nil
+}
+
+func (pv *KeychainVault) restoredCompanion(p keychain.WebPassword) ([]byte, error) {
+	items, err := pv.v.Items("Passwords")
+	if err != nil {
+		return nil, fmt.Errorf("appleservices: restore web password (fetch metadata): %w", err)
+	}
+	for _, ref := range p.Deleted {
+		for _, it := range items {
+			if it.Name != ref.RecordName || it.Agrp != "com.apple.password-manager-recently-deleted" {
+				continue
+			}
+			blob, err := keychain.EncodeCompanionData(p.Domain, p.Username, it.Data)
+			if err != nil {
+				return nil, fmt.Errorf("appleservices: %w", err)
+			}
+			return blob, nil
+		}
+	}
+	if p.Note == "" && (p.Website || p.Name == "") {
+		return nil, nil
+	}
+	blob, err := keychain.EncodeMetadataItem(p.Domain, p.Username, p.Name, p.Note)
+	if err != nil {
+		return nil, fmt.Errorf("appleservices: %w", err)
+	}
+	return blob, nil
 }
 
 func (pv *KeychainVault) addRestoredItem(attrs []byte) error {

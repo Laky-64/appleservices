@@ -65,6 +65,10 @@ func EncodeCompanionItem(srvr, username string, inner map[string]any) ([]byte, e
 	if err != nil {
 		return nil, err
 	}
+	return EncodeCompanionData(srvr, username, data)
+}
+
+func EncodeCompanionData(srvr, username string, data []byte) ([]byte, error) {
 	attrs := inetAttrs("com.apple.password-manager", srvr, username, data)
 	attrs["type"] = uint64(metadataType)
 	attrs["desc"] = "Password Manager Metadata"
