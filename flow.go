@@ -995,14 +995,18 @@ func (pv *KeychainVault) RestoreWebPassword(p keychain.WebPassword) error {
 	if !p.IsDeleted || len(p.Deleted) == 0 {
 		return fmt.Errorf("appleservices: RestoreWebPassword: %q is not a deleted entry", p.Domain)
 	}
-	cred, err := keychain.EncodeWebPasswordItem(p.Domain, p.Username, p.Password)
+	items, err := pv.v.Items("Passwords")
 	if err != nil {
-		return fmt.Errorf("appleservices: %w", err)
+		return fmt.Errorf("appleservices: restore web password (fetch deleted records): %w", err)
+	}
+	cred, err := pv.restoredCredential(items, p)
+	if err != nil {
+		return err
 	}
 	if err := pv.addRestoredItem(cred); err != nil {
 		return fmt.Errorf("appleservices: restore web password (recreate credential): %w", err)
 	}
-	meta, err := pv.restoredCompanion(p)
+	meta, err := pv.restoredCompanion(items, p)
 	if err != nil {
 		return err
 	}
@@ -1023,22 +1027,39 @@ func (pv *KeychainVault) RestoreWebPassword(p keychain.WebPassword) error {
 	return nil
 }
 
-func (pv *KeychainVault) restoredCompanion(p keychain.WebPassword) ([]byte, error) {
-	items, err := pv.v.Items("Passwords")
-	if err != nil {
-		return nil, fmt.Errorf("appleservices: restore web password (fetch metadata): %w", err)
-	}
-	for _, ref := range p.Deleted {
-		for _, it := range items {
-			if it.Name != ref.RecordName || it.Agrp != "com.apple.password-manager-recently-deleted" {
-				continue
+func deletedRecord(items []keychain.Item, refs []keychain.DeletedRef, agrp string) *keychain.Item {
+	for _, ref := range refs {
+		for i := range items {
+			if items[i].Name == ref.RecordName && items[i].Agrp == agrp {
+				return &items[i]
 			}
-			blob, err := keychain.EncodeCompanionData(p.Domain, p.Username, it.Data)
-			if err != nil {
-				return nil, fmt.Errorf("appleservices: %w", err)
-			}
-			return blob, nil
 		}
+	}
+	return nil
+}
+
+func (pv *KeychainVault) restoredCredential(items []keychain.Item, p keychain.WebPassword) ([]byte, error) {
+	if it := deletedRecord(items, p.Deleted, "com.apple.cfnetwork-recently-deleted"); it != nil {
+		blob, err := keychain.EncodeItemRestored(it.Attrs, "com.apple.cfnetwork", []byte(p.Password))
+		if err != nil {
+			return nil, fmt.Errorf("appleservices: %w", err)
+		}
+		return blob, nil
+	}
+	blob, err := keychain.EncodeWebPasswordItem(p.Domain, p.Username, p.Password)
+	if err != nil {
+		return nil, fmt.Errorf("appleservices: %w", err)
+	}
+	return blob, nil
+}
+
+func (pv *KeychainVault) restoredCompanion(items []keychain.Item, p keychain.WebPassword) ([]byte, error) {
+	if it := deletedRecord(items, p.Deleted, "com.apple.password-manager-recently-deleted"); it != nil {
+		blob, err := keychain.EncodeItemRestored(it.Attrs, "com.apple.password-manager", it.Data)
+		if err != nil {
+			return nil, fmt.Errorf("appleservices: %w", err)
+		}
+		return blob, nil
 	}
 	if p.Note == "" && (p.Website || p.Name == "") {
 		return nil, nil

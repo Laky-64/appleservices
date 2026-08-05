@@ -65,10 +65,6 @@ func EncodeCompanionItem(srvr, username string, inner map[string]any) ([]byte, e
 	if err != nil {
 		return nil, err
 	}
-	return EncodeCompanionData(srvr, username, data)
-}
-
-func EncodeCompanionData(srvr, username string, data []byte) ([]byte, error) {
 	attrs := inetAttrs("com.apple.password-manager", srvr, username, data)
 	attrs["type"] = uint64(metadataType)
 	attrs["desc"] = "Password Manager Metadata"
@@ -86,6 +82,18 @@ func EncodeItemWithSecret(attrs map[string]any, secret []byte) ([]byte, error) {
 		out[k] = v
 	}
 	out["v_Data"] = secret
+	delete(out, "sha1")
+	return plist.Marshal(out, plist.BinaryFormat)
+}
+
+func EncodeItemRestored(attrs map[string]any, agrp string, secret []byte) ([]byte, error) {
+	out := make(map[string]any, len(attrs))
+	for k, v := range attrs {
+		out[k] = v
+	}
+	out["agrp"] = agrp
+	out["v_Data"] = secret
+	out["mdat"] = time.Now().UTC()
 	delete(out, "sha1")
 	return plist.Marshal(out, plist.BinaryFormat)
 }
