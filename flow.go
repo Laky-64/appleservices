@@ -922,16 +922,7 @@ func (pv *KeychainVault) PurgeWebPasswords(ps []keychain.WebPassword) []BulkResu
 }
 
 func (pv *KeychainVault) DeleteWebPasswords(ps []keychain.WebPassword) []BulkResult[keychain.WebPassword] {
-	out := make([]BulkResult[keychain.WebPassword], len(ps))
-	anyValid := false
-	for i, p := range ps {
-		out[i] = BulkResult[keychain.WebPassword]{Entry: p}
-		if p.IsDeleted {
-			out[i].Err = fmt.Errorf("appleservices: DeleteWebPasswords: %q is already deleted", p.Domain)
-			continue
-		}
-		anyValid = true
-	}
+	out, anyValid := deletableWebPasswords(ps)
 	if !anyValid {
 		return out
 	}
@@ -946,6 +937,34 @@ func (pv *KeychainVault) DeleteWebPasswords(ps []keychain.WebPassword) []BulkRes
 		return out
 	}
 
+	pv.moveWebPasswordsToDeleted(items, ps, out)
+	return out
+}
+
+func (pv *KeychainVault) DeleteWebPasswordsIn(items []keychain.Item, ps []keychain.WebPassword) []BulkResult[keychain.WebPassword] {
+	out, anyValid := deletableWebPasswords(ps)
+	if !anyValid {
+		return out
+	}
+	pv.moveWebPasswordsToDeleted(items, ps, out)
+	return out
+}
+
+func deletableWebPasswords(ps []keychain.WebPassword) ([]BulkResult[keychain.WebPassword], bool) {
+	out := make([]BulkResult[keychain.WebPassword], len(ps))
+	anyValid := false
+	for i, p := range ps {
+		out[i] = BulkResult[keychain.WebPassword]{Entry: p}
+		if p.IsDeleted {
+			out[i].Err = fmt.Errorf("appleservices: DeleteWebPasswords: %q is already deleted", p.Domain)
+			continue
+		}
+		anyValid = true
+	}
+	return out, anyValid
+}
+
+func (pv *KeychainVault) moveWebPasswordsToDeleted(items []keychain.Item, ps []keychain.WebPassword, out []BulkResult[keychain.WebPassword]) {
 	for i, p := range ps {
 		if out[i].Err != nil {
 			continue
@@ -970,7 +989,6 @@ func (pv *KeychainVault) DeleteWebPasswords(ps []keychain.WebPassword) []BulkRes
 			}
 		}
 	}
-	return out
 }
 
 func (pv *KeychainVault) RestoreWebPassword(p keychain.WebPassword) error {
