@@ -558,17 +558,44 @@ const (
 	agrpWebauthnDeleted = "com.apple.webkit.webauthn-recently-deleted"
 )
 
-func (pv *KeychainVault) DeletePasskey(pk keychain.Passkey) error {
-	if pk.IsDeleted {
-		return fmt.Errorf("appleservices: DeletePasskey: passkey %q is already deleted", pk.RelyingParty)
+func (pv *KeychainVault) DeletePasskeys(pks []keychain.Passkey) []BulkResult[keychain.Passkey] {
+	out := make([]BulkResult[keychain.Passkey], len(pks))
+	anyValid := false
+	for i, pk := range pks {
+		out[i] = BulkResult[keychain.Passkey]{Entry: pk}
+		if pk.IsDeleted {
+			out[i].Err = fmt.Errorf("appleservices: DeletePasskeys: passkey %q is already deleted", pk.RelyingParty)
+			continue
+		}
+		if pk.Record.RecordName == "" {
+			out[i].Err = fmt.Errorf("appleservices: DeletePasskeys: passkey %q has no backing record", pk.RelyingParty)
+			continue
+		}
+		anyValid = true
 	}
-	if pk.Record.RecordName == "" {
-		return fmt.Errorf("appleservices: DeletePasskey: passkey %q has no backing record", pk.RelyingParty)
+	if !anyValid {
+		return out
 	}
-	if _, err := pv.v.MoveRecord("Passwords", pk.Record.RecordName, agrpWebauthnDeleted); err != nil {
-		return fmt.Errorf("appleservices: delete passkey: %w", err)
+
+	items, err := pv.v.Items("Passwords")
+	if err != nil {
+		for i := range out {
+			if out[i].Err == nil {
+				out[i].Err = fmt.Errorf("appleservices: DeletePasskeys: %w", err)
+			}
+		}
+		return out
 	}
-	return nil
+
+	for i, pk := range pks {
+		if out[i].Err != nil {
+			continue
+		}
+		if _, err := pv.v.MoveRecordIn("Passwords", items, pk.Record.RecordName, agrpWebauthnDeleted); err != nil {
+			out[i].Err = fmt.Errorf("appleservices: DeletePasskeys (move %s): %w", pk.Record.RecordName, err)
+		}
+	}
+	return out
 }
 
 func (pv *KeychainVault) RestorePasskey(pk keychain.Passkey) error {
@@ -581,14 +608,40 @@ func (pv *KeychainVault) RestorePasskey(pk keychain.Passkey) error {
 	return nil
 }
 
-func (pv *KeychainVault) PurgePasskey(pk keychain.Passkey) error {
-	if !pk.IsDeleted || pk.Record.RecordName == "" {
-		return fmt.Errorf("appleservices: PurgePasskey: passkey %q is not a deleted entry", pk.RelyingParty)
+func (pv *KeychainVault) PurgePasskeys(pks []keychain.Passkey) []BulkResult[keychain.Passkey] {
+	out := make([]BulkResult[keychain.Passkey], len(pks))
+	for i, pk := range pks {
+		out[i] = BulkResult[keychain.Passkey]{Entry: pk}
 	}
-	if _, err := pv.v.DeleteRecord("Passwords", pk.Record.RecordName, pk.Record.RecordEtag); err != nil {
-		return fmt.Errorf("appleservices: purge passkey: %w", err)
+	var refs []keychain.DeletedRef
+	var owner []int
+	for i, pk := range pks {
+		if !pk.IsDeleted || pk.Record.RecordName == "" {
+			out[i].Err = fmt.Errorf("appleservices: PurgePasskeys: passkey %q is not a deleted entry", pk.RelyingParty)
+			continue
+		}
+		refs = append(refs, pk.Record)
+		owner = append(owner, i)
 	}
-	return nil
+	if len(refs) == 0 {
+		return out
+	}
+	results, err := pv.v.DeleteRecords("Passwords", refs)
+	if err != nil {
+		for _, i := range owner {
+			if out[i].Err == nil {
+				out[i].Err = fmt.Errorf("appleservices: PurgePasskeys batch: %w", err)
+			}
+		}
+		return out
+	}
+	for j, sr := range results {
+		i := owner[j]
+		if out[i].Err == nil && sr.Code != 1 {
+			out[i].Err = &cloudkit.SaveError{SaveResult: sr}
+		}
+	}
+	return out
 }
 
 func (pv *KeychainVault) AddWebPassword(domain, username, password, note string) error {
@@ -633,35 +686,6 @@ func (pv *KeychainVault) AddManualPasswordWithID(id, title, username, password, 
 	}
 	if _, _, err := pv.v.AddItem("Passwords", meta); err != nil {
 		return fmt.Errorf("appleservices: manual password credential saved but title metadata failed: %w", err)
-	}
-	return nil
-}
-
-func (pv *KeychainVault) DeleteWebPassword(p keychain.WebPassword) error {
-	if p.IsDeleted {
-		return fmt.Errorf("appleservices: DeleteWebPassword: %q is already deleted", p.Domain)
-	}
-	items, err := pv.v.Items("Passwords")
-	if err != nil {
-		return fmt.Errorf("appleservices: delete web password: %w", err)
-	}
-	type activeRec struct{ name, agrp string }
-	var recs []activeRec
-	for _, it := range items {
-		if it.Srvr != p.Domain || it.Acct != p.Username {
-			continue
-		}
-		if it.Agrp == "com.apple.cfnetwork" || it.Agrp == "com.apple.password-manager" {
-			recs = append(recs, activeRec{it.Name, it.Agrp})
-		}
-	}
-	if len(recs) == 0 {
-		return fmt.Errorf("appleservices: DeleteWebPassword: no active records for %q (%s)", p.Domain, p.Username)
-	}
-	for _, r := range recs {
-		if _, err := pv.v.MoveRecord("Passwords", r.name, r.agrp+"-recently-deleted"); err != nil {
-			return fmt.Errorf("appleservices: delete web password (move %s): %w", r.name, err)
-		}
 	}
 	return nil
 }
@@ -839,16 +863,114 @@ func (pv *KeychainVault) writeCompanion(items []keychain.Item, i int, srvr, acct
 	return nil
 }
 
-func (pv *KeychainVault) PurgeWebPassword(p keychain.WebPassword) error {
-	if !p.IsDeleted || len(p.Deleted) == 0 {
-		return fmt.Errorf("appleservices: PurgeWebPassword: %q is not a deleted entry", p.Domain)
+type BulkResult[T any] struct {
+	Entry T
+	Err   error
+}
+
+func foldPurge(entries []keychain.WebPassword, owner []int, results []cloudkit.SaveResult) []BulkResult[keychain.WebPassword] {
+	out := make([]BulkResult[keychain.WebPassword], len(entries))
+	for i, e := range entries {
+		out[i] = BulkResult[keychain.WebPassword]{Entry: e}
 	}
-	for _, ref := range p.Deleted {
-		if _, err := pv.v.DeleteRecord("Passwords", ref.RecordName, ref.RecordEtag); err != nil {
-			return fmt.Errorf("appleservices: purge web password (record %s): %w", ref.RecordName, err)
+	for j, sr := range results {
+		i := owner[j]
+		if out[i].Err != nil || sr.Code == 1 {
+			continue
+		}
+		out[i].Err = &cloudkit.SaveError{SaveResult: sr}
+	}
+	return out
+}
+
+func (pv *KeychainVault) PurgeWebPasswords(ps []keychain.WebPassword) []BulkResult[keychain.WebPassword] {
+	out := make([]BulkResult[keychain.WebPassword], len(ps))
+	for i, p := range ps {
+		out[i] = BulkResult[keychain.WebPassword]{Entry: p}
+	}
+	var refs []keychain.DeletedRef
+	var owner []int
+	for i, p := range ps {
+		if !p.IsDeleted || len(p.Deleted) == 0 {
+			out[i].Err = fmt.Errorf("appleservices: PurgeWebPasswords: %q is not a deleted entry", p.Domain)
+			continue
+		}
+		for _, ref := range p.Deleted {
+			refs = append(refs, ref)
+			owner = append(owner, i)
 		}
 	}
-	return nil
+	if len(refs) == 0 {
+		return out
+	}
+	results, err := pv.v.DeleteRecords("Passwords", refs)
+	if err != nil {
+		for _, i := range owner {
+			if out[i].Err == nil {
+				out[i].Err = fmt.Errorf("appleservices: PurgeWebPasswords batch: %w", err)
+			}
+		}
+		return out
+	}
+	folded := foldPurge(ps, owner, results)
+	for i := range out {
+		if out[i].Err == nil {
+			out[i].Err = folded[i].Err
+		}
+	}
+	return out
+}
+
+func (pv *KeychainVault) DeleteWebPasswords(ps []keychain.WebPassword) []BulkResult[keychain.WebPassword] {
+	out := make([]BulkResult[keychain.WebPassword], len(ps))
+	anyValid := false
+	for i, p := range ps {
+		out[i] = BulkResult[keychain.WebPassword]{Entry: p}
+		if p.IsDeleted {
+			out[i].Err = fmt.Errorf("appleservices: DeleteWebPasswords: %q is already deleted", p.Domain)
+			continue
+		}
+		anyValid = true
+	}
+	if !anyValid {
+		return out
+	}
+
+	items, err := pv.v.Items("Passwords")
+	if err != nil {
+		for i := range out {
+			if out[i].Err == nil {
+				out[i].Err = fmt.Errorf("appleservices: DeleteWebPasswords: %w", err)
+			}
+		}
+		return out
+	}
+
+	for i, p := range ps {
+		if out[i].Err != nil {
+			continue
+		}
+		var recs []struct{ name, agrp string }
+		for _, it := range items {
+			if it.Srvr != p.Domain || it.Acct != p.Username {
+				continue
+			}
+			if it.Agrp == "com.apple.cfnetwork" || it.Agrp == "com.apple.password-manager" {
+				recs = append(recs, struct{ name, agrp string }{it.Name, it.Agrp})
+			}
+		}
+		if len(recs) == 0 {
+			out[i].Err = fmt.Errorf("appleservices: DeleteWebPasswords: no active records for %q (%s)", p.Domain, p.Username)
+			continue
+		}
+		for _, r := range recs {
+			if _, err := pv.v.MoveRecordIn("Passwords", items, r.name, r.agrp+"-recently-deleted"); err != nil {
+				out[i].Err = fmt.Errorf("appleservices: DeleteWebPasswords (move %s): %w", r.name, err)
+				break
+			}
+		}
+	}
+	return out
 }
 
 func (pv *KeychainVault) RestoreWebPassword(p keychain.WebPassword) error {
@@ -871,9 +993,13 @@ func (pv *KeychainVault) RestoreWebPassword(p keychain.WebPassword) error {
 			return fmt.Errorf("appleservices: restore web password (recreate metadata): %w", err)
 		}
 	}
-	for _, ref := range p.Deleted {
-		if _, err := pv.v.DeleteRecord("Passwords", ref.RecordName, ref.RecordEtag); err != nil {
-			return fmt.Errorf("appleservices: items restored but removing a recently-deleted record (%s) failed (retry RestoreWebPassword or PurgeWebPassword to clear it): %w", ref.RecordName, err)
+	results, err := pv.v.DeleteRecords("Passwords", p.Deleted)
+	if err != nil {
+		return fmt.Errorf("appleservices: items restored but removing the recently-deleted records failed (retry RestoreWebPassword or PurgeWebPasswords to clear them): %w", err)
+	}
+	for i, sr := range results {
+		if sr.Code != 1 {
+			return fmt.Errorf("appleservices: items restored but removing a recently-deleted record (%s) failed (retry RestoreWebPassword or PurgeWebPasswords to clear it): %w", p.Deleted[i].RecordName, &cloudkit.SaveError{SaveResult: sr})
 		}
 	}
 	return nil

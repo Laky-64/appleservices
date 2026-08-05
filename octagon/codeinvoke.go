@@ -25,6 +25,18 @@ func UnframeCodeInvoke(body []byte) ([]byte, error) {
 	return rest, nil
 }
 
+func NextCodeInvokeFrame(body []byte) (msg, rest []byte, err error) {
+	n, off, err := consumeUvarint(body)
+	if err != nil {
+		return nil, nil, fmt.Errorf("code/invoke framing: %w", err)
+	}
+	body = body[off:]
+	if uint64(len(body)) < n {
+		return nil, nil, fmt.Errorf("code/invoke framing: prefix length %d > remaining %d", n, len(body))
+	}
+	return body[:n], body[n:], nil
+}
+
 func appendUvarint(buf []byte, v uint64) []byte {
 	for v >= 0x80 {
 		buf = append(buf, byte(v)|0x80)

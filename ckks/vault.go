@@ -45,9 +45,15 @@ func OpenVault(ck *cloudkit.Client, sponsorEnc *ecdsa.PrivateKey, sponsorPeerID 
 	}
 }
 
-func (v *Vault) DeleteRecord(view, recordName, etag string) (cloudkit.SaveResult, error) {
-	req := EncodeRecordDelete(recordName, view, v.ck.UserID(), etag)
-	return v.ck.RecordDelete(req)
+func (v *Vault) DeleteRecords(view string, refs []keychain.DeletedRef) ([]cloudkit.SaveResult, error) {
+	if len(refs) == 0 {
+		return nil, nil
+	}
+	reqs := make([][]byte, len(refs))
+	for i, ref := range refs {
+		reqs[i] = EncodeRecordDelete(ref.RecordName, view, v.ck.UserID(), ref.RecordEtag)
+	}
+	return v.ck.RecordDeleteBatch(reqs)
 }
 
 func (v *Vault) MoveRecord(view, recordName, newAgrp string) (cloudkit.SaveResult, error) {
@@ -55,6 +61,10 @@ func (v *Vault) MoveRecord(view, recordName, newAgrp string) (cloudkit.SaveResul
 	if err != nil {
 		return cloudkit.SaveResult{}, err
 	}
+	return v.MoveRecordIn(view, items, recordName, newAgrp)
+}
+
+func (v *Vault) MoveRecordIn(view string, items []keychain.Item, recordName, newAgrp string) (cloudkit.SaveResult, error) {
 	var target *keychain.Item
 	for i := range items {
 		if items[i].Name == recordName {
@@ -92,9 +102,13 @@ func (v *Vault) MoveRecord(view, recordName, newAgrp string) (cloudkit.SaveResul
 			return sr, fmt.Errorf("ckks: move record (create in %q): %w", newAgrp, err)
 		}
 	}
-	sr, err := v.DeleteRecord(view, recordName, target.Etag)
+	results, err := v.DeleteRecords(view, []keychain.DeletedRef{{RecordName: recordName, RecordEtag: target.Etag}})
 	if err != nil {
-		return sr, fmt.Errorf("ckks: move record (delete original %q): %w", recordName, err)
+		return cloudkit.SaveResult{}, fmt.Errorf("ckks: move record (delete original %q): %w", recordName, err)
+	}
+	sr := results[0]
+	if sr.Code != 1 {
+		return sr, fmt.Errorf("ckks: move record (delete original %q): %w", recordName, &cloudkit.SaveError{SaveResult: sr})
 	}
 	return sr, nil
 }
