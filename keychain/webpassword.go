@@ -49,31 +49,40 @@ type entryMeta struct {
 	domains []string
 }
 
-func companionFor(metas []entryMeta, srvr, acct string) entryMeta {
-	var shared, a entryMeta
-	var hasShared, hasAny bool
+func companionFor(metas []entryMeta, srvr, acct string, sole bool) entryMeta {
+	var accountless entryMeta
+	var hasAccountless bool
 	for _, m := range metas {
 		if m.srvr != srvr {
 			continue
 		}
-		switch {
-		case m.acct == acct:
+		if m.acct == acct {
 			return m
-		case m.acct == "" && !hasShared:
-			shared, hasShared = m, true
-		case !hasAny:
-			a, hasAny = m, true
+		}
+		if m.acct == "" && !hasAccountless {
+			accountless, hasAccountless = m, true
 		}
 	}
-	if hasShared {
-		return shared
+	if hasAccountless && sole {
+		return accountless
 	}
-	return a
+	return entryMeta{}
+}
+
+func credentialsPerDomain(items []Item) map[string]int {
+	out := map[string]int{}
+	for _, it := range items {
+		if it.Class == "inet" && it.Agrp == "com.apple.cfnetwork" {
+			out[it.Srvr]++
+		}
+	}
+	return out
 }
 
 func WebPasswords(items []Item) []WebPassword {
 	var manual, website []entryMeta
 	var personal []personalRec
+	accounts := credentialsPerDomain(items)
 	for _, it := range items {
 		switch it.Agrp {
 		case "com.apple.password-manager":
@@ -101,7 +110,7 @@ func WebPasswords(items []Item) []WebPassword {
 	}
 
 	title := func(srvr, acct string) string {
-		if t := companionFor(manual, srvr, acct).title; t != "" {
+		if t := companionFor(manual, srvr, acct, accounts[srvr] == 1).title; t != "" {
 			return t
 		}
 		for _, m := range manual {
@@ -131,7 +140,7 @@ func WebPasswords(items []Item) []WebPassword {
 			continue
 		}
 		w := !uuid.IsCanonical(it.Srvr)
-		companion := companionFor(manual, it.Srvr, it.Acct)
+		companion := companionFor(manual, it.Srvr, it.Acct, accounts[it.Srvr] == 1)
 		wp := WebPassword{
 			Name:     title(it.Srvr, it.Acct),
 			Domain:   it.Srvr,
