@@ -489,6 +489,21 @@ func CompanionMetadata(inner map[string]any) (title, note, totp string) {
 	return asString(inner["title"]), asString(inner["notes"]), totpURL(inner["totp"])
 }
 
+func CompanionSites(inner map[string]any) []string {
+	return siteAssociations(inner["s_as"])
+}
+
+func EncodeSiteAssociations(domains []string) []any {
+	out := make([]any, 0, len(domains))
+	for _, d := range domains {
+		if d == "" {
+			continue
+		}
+		out = append(out, map[string]any{"s": d})
+	}
+	return out
+}
+
 func asString(v any) string {
 	switch s := v.(type) {
 	case string:

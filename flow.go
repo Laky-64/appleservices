@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 
 	"github.com/Laky-64/appleservices/anisette"
 	"github.com/Laky-64/appleservices/ckks"
@@ -748,9 +749,17 @@ func (pv *KeychainVault) EditWebPasswordIn(items []keychain.Item, p keychain.Web
 }
 
 type Metadata struct {
-	Title string
-	Note  string
-	TOTP  string
+	Title   string
+	Note    string
+	TOTP    string
+	Domains []string
+}
+
+func (m Metadata) Equal(o Metadata) bool {
+	return m.Title == o.Title &&
+		m.Note == o.Note &&
+		m.TOTP == o.TOTP &&
+		slices.Equal(m.Domains, o.Domains)
 }
 
 func (pv *KeychainVault) SetMetadata(p keychain.WebPassword, m Metadata) error {
@@ -766,7 +775,22 @@ func (pv *KeychainVault) SetMetadataIn(items []keychain.Item, p keychain.WebPass
 }
 
 func (pv *KeychainVault) SetTitleIn(items []keychain.Item, p keychain.WebPassword, title string) error {
-	return pv.setMetadata(items, p, Metadata{Title: title, Note: p.Note, TOTP: p.TOTP}, "SetTitle")
+	return pv.setMetadata(items, p, Metadata{
+		Title:   title,
+		Note:    p.Note,
+		TOTP:    p.TOTP,
+		Domains: AssociatedSites(p),
+	}, "SetTitle")
+}
+
+func AssociatedSites(p keychain.WebPassword) []string {
+	out := make([]string, 0, len(p.Domains))
+	for _, d := range p.Domains {
+		if d != "" && d != p.Domain {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 func (pv *KeychainVault) setMetadata(items []keychain.Item, p keychain.WebPassword, m Metadata, what string) error {
@@ -784,7 +808,7 @@ func (pv *KeychainVault) setMetadata(items []keychain.Item, p keychain.WebPasswo
 
 	i := companionIndex(items, p.Domain, p.Username)
 	if i < 0 {
-		inner := map[string]any{"s_as": []any{}}
+		inner := map[string]any{"s_as": keychain.EncodeSiteAssociations(m.Domains)}
 		if !p.Website && p.Name != "" {
 			inner["title"] = []byte(p.Name)
 		}
@@ -831,6 +855,10 @@ func applyMetadata(inner map[string]any, m Metadata, totp map[string]any) bool {
 	set("title", m.Title, title, []byte(m.Title))
 	set("notes", m.Note, note, []byte(m.Note))
 	set("totp", m.TOTP, otpauth, totp)
+	if !slices.Equal(m.Domains, keychain.CompanionSites(inner)) {
+		inner["s_as"] = keychain.EncodeSiteAssociations(m.Domains)
+		changed = true
+	}
 	return changed
 }
 
