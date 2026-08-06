@@ -808,7 +808,7 @@ func (pv *KeychainVault) setMetadata(items []keychain.Item, p keychain.WebPasswo
 
 	i := companionIndex(items, p.Domain, p.Username)
 	if i < 0 {
-		inner := map[string]any{"s_as": keychain.EncodeSiteAssociations(m.Domains)}
+		inner := map[string]any{"s_as": []any{}}
 		if !p.Website && p.Name != "" {
 			inner["title"] = []byte(p.Name)
 		}
