@@ -699,6 +699,22 @@ func (pv *KeychainVault) EditWebPassword(p keychain.WebPassword, newDomain, newU
 	return pv.EditWebPasswordIn(items, p, newDomain, newUsername, newPassword)
 }
 
+func hostsOf(p keychain.WebPassword) []string {
+	if len(p.MergedHosts) > 0 {
+		return p.MergedHosts
+	}
+	return []string{p.Domain}
+}
+
+func hostMatch(srvr string, p keychain.WebPassword) bool {
+	for _, h := range hostsOf(p) {
+		if srvr == h {
+			return true
+		}
+	}
+	return false
+}
+
 func (pv *KeychainVault) EditWebPasswordIn(items []keychain.Item, p keychain.WebPassword, newDomain, newUsername, newPassword string) error {
 	if p.IsDeleted {
 		return fmt.Errorf("appleservices: EditWebPassword: %q is deleted; restore it first", p.Domain)
@@ -706,10 +722,17 @@ func (pv *KeychainVault) EditWebPasswordIn(items []keychain.Item, p keychain.Web
 	if newDomain == "" || newUsername == "" {
 		return fmt.Errorf("appleservices: EditWebPassword: domain and username must be non-empty")
 	}
-	var credUpdated bool
+	if len(p.MergedHosts) > 1 && (newDomain != p.Domain || newUsername != p.Username) {
+		return fmt.Errorf("appleservices: EditWebPassword: merged entry spans %d hosts; rename not supported (edit password only, or operate per-host)", len(p.MergedHosts))
+	}
+	var credUpdated int
 	for i, it := range items {
-		if it.Class == "inet" && it.Agrp == "com.apple.cfnetwork" && it.Srvr == p.Domain && it.Acct == p.Username {
-			blob, err := keychain.EncodeItemRenamed(it.Attrs, newDomain, newUsername, []byte(newPassword))
+		if it.Class == "inet" && it.Agrp == "com.apple.cfnetwork" && hostMatch(it.Srvr, p) && it.Acct == p.Username {
+			itemNewDomain := it.Srvr
+			if it.Srvr == p.Domain {
+				itemNewDomain = newDomain
+			}
+			blob, err := keychain.EncodeItemRenamed(it.Attrs, itemNewDomain, newUsername, []byte(newPassword))
 			if err != nil {
 				return fmt.Errorf("appleservices: %w", err)
 			}
@@ -717,20 +740,19 @@ func (pv *KeychainVault) EditWebPasswordIn(items []keychain.Item, p keychain.Web
 			if err != nil {
 				return fmt.Errorf("appleservices: edit web password: %w", err)
 			}
-			items[i].Srvr = newDomain
+			items[i].Srvr = itemNewDomain
 			items[i].Acct = newUsername
 			items[i].Data = []byte(newPassword)
 			items[i].Etag = sr.Etag
 			if items[i].Attrs != nil {
-				items[i].Attrs["srvr"] = newDomain
+				items[i].Attrs["srvr"] = itemNewDomain
 				items[i].Attrs["acct"] = newUsername
 				items[i].Attrs["v_Data"] = []byte(newPassword)
 			}
-			credUpdated = true
-			break
+			credUpdated++
 		}
 	}
-	if !credUpdated {
+	if credUpdated == 0 {
 		return fmt.Errorf("appleservices: EditWebPassword: no active entry for %q (%s)", p.Domain, p.Username)
 	}
 	if newDomain == p.Domain && newUsername == p.Username {
@@ -806,8 +828,9 @@ func (pv *KeychainVault) setMetadata(items []keychain.Item, p keychain.WebPasswo
 		totp = encoded
 	}
 
-	i := companionIndex(items, p.Domain, p.Username)
-	if i < 0 {
+	hosts := hostsOf(p)
+	idxs := companionIndexesAcrossHosts(items, hosts, p.Username)
+	if len(idxs) == 0 {
 		inner := map[string]any{"s_as": []any{}}
 		if !p.Website && p.Name != "" {
 			inner["title"] = []byte(p.Name)
@@ -815,7 +838,7 @@ func (pv *KeychainVault) setMetadata(items []keychain.Item, p keychain.WebPasswo
 		if !applyMetadata(inner, m, totp) {
 			return nil
 		}
-		blob, err := keychain.EncodeCompanionItem(p.Domain, p.Username, inner)
+		blob, err := keychain.EncodeCompanionItem(hosts[0], p.Username, inner)
 		if err != nil {
 			return fmt.Errorf("appleservices: %w", err)
 		}
@@ -825,15 +848,17 @@ func (pv *KeychainVault) setMetadata(items []keychain.Item, p keychain.WebPasswo
 		return nil
 	}
 
-	inner := keychain.DecodeCompanionInner(items[i].Data)
-	if inner == nil {
-		inner = map[string]any{}
-	}
-	if !applyMetadata(inner, m, totp) {
-		return nil
-	}
-	if err := pv.writeCompanion(items, i, p.Domain, p.Username, inner); err != nil {
-		return fmt.Errorf("appleservices: %s: %w", what, err)
+	for _, i := range idxs {
+		inner := keychain.DecodeCompanionInner(items[i].Data)
+		if inner == nil {
+			inner = map[string]any{}
+		}
+		if !applyMetadata(inner, m, totp) {
+			continue
+		}
+		if err := pv.writeCompanion(items, i, items[i].Srvr, p.Username, inner); err != nil {
+			return fmt.Errorf("appleservices: %s: %w", what, err)
+		}
 	}
 	return nil
 }
@@ -869,6 +894,20 @@ func companionIndex(items []keychain.Item, srvr, acct string) int {
 		}
 	}
 	return -1
+}
+
+func companionIndexesAcrossHosts(items []keychain.Item, hosts []string, acct string) []int {
+	hostSet := make(map[string]bool, len(hosts))
+	for _, h := range hosts {
+		hostSet[h] = true
+	}
+	var idxs []int
+	for i, it := range items {
+		if it.Agrp == "com.apple.password-manager" && hostSet[it.Srvr] && it.Acct == acct {
+			idxs = append(idxs, i)
+		}
+	}
+	return idxs
 }
 
 func (pv *KeychainVault) writeCompanion(items []keychain.Item, i int, srvr, acct string, inner map[string]any) error {
@@ -999,7 +1038,7 @@ func (pv *KeychainVault) moveWebPasswordsToDeleted(items []keychain.Item, ps []k
 		}
 		var recs []struct{ name, agrp string }
 		for _, it := range items {
-			if it.Srvr != p.Domain || it.Acct != p.Username {
+			if !hostMatch(it.Srvr, p) || it.Acct != p.Username {
 				continue
 			}
 			if it.Agrp == "com.apple.cfnetwork" || it.Agrp == "com.apple.password-manager" {

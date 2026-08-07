@@ -16,6 +16,7 @@ type WebPassword struct {
 	Name      string
 	Domain    string
 	Domains   []string
+	MergedHosts     []string
 	Website   bool
 	Username  string
 	Password  string
@@ -81,6 +82,104 @@ func credentialsPerDomain(items []Item) map[string]int {
 
 func IsWebsiteDomain(srvr string) bool {
 	return !uuid.IsCanonical(srvr)
+}
+
+func registrableDomain(srvr string, website []entryMeta) string {
+	best := srvr
+	for _, w := range website {
+		if srvr == w.srvr || strings.HasSuffix(srvr, "."+w.srvr) {
+			if best == srvr || len(w.srvr) < len(best) {
+				best = w.srvr
+			}
+		}
+	}
+	if best == srvr && strings.HasPrefix(srvr, "www.") {
+		return srvr[len("www."):]
+	}
+	return best
+}
+
+func mergeCredentials(entries []WebPassword, website []entryMeta) []WebPassword {
+	type group struct{ members []WebPassword }
+	groups := map[string]*group{}
+	var order []string
+	var out []WebPassword
+	for _, e := range entries {
+		if !e.Website || e.Shared {
+			out = append(out, e)
+			continue
+		}
+		k := registrableDomain(e.Domain, website) + "\x00" + e.Username
+		g, ok := groups[k]
+		if !ok {
+			g = &group{}
+			groups[k] = g
+			order = append(order, k)
+		}
+		g.members = append(g.members, e)
+	}
+	for _, k := range order {
+		g := groups[k]
+		if len(g.members) == 1 {
+			out = append(out, g.members[0])
+			continue
+		}
+		out = append(out, mergeGroup(g.members, registrableDomain(g.members[0].Domain, website)))
+	}
+	return out
+}
+
+func mergeGroup(members []WebPassword, regDomain string) WebPassword {
+	hostSet := map[string]bool{}
+	var hosts []string
+	m := WebPassword{Domain: regDomain, Username: members[0].Username, Website: true}
+	domSet := map[string]bool{}
+	grpSet := map[string]bool{}
+	var newest *WebPassword
+	for i := range members {
+		e := &members[i]
+		if !hostSet[e.Domain] {
+			hostSet[e.Domain] = true
+			hosts = append(hosts, e.Domain)
+		}
+		if m.Name == "" {
+			m.Name = e.Name
+		}
+		if m.TOTP == "" {
+			m.TOTP = e.TOTP
+		}
+		if m.Note == "" {
+			m.Note = e.Note
+		}
+		if m.Created.IsZero() || (!e.Created.IsZero() && e.Created.Before(m.Created)) {
+			m.Created = e.Created
+		}
+		if newest == nil || e.Modified.After(newest.Modified) {
+			newest = e
+		}
+		for _, d := range e.Domains {
+			if !domSet[d] {
+				domSet[d] = true
+				m.Domains = append(m.Domains, d)
+			}
+		}
+		for _, gg := range e.Groups {
+			if !grpSet[gg.ID] {
+				grpSet[gg.ID] = true
+				m.Groups = append(m.Groups, gg)
+			}
+		}
+		m.IsDeleted = m.IsDeleted || e.IsDeleted
+		m.Deleted = append(m.Deleted, e.Deleted...)
+	}
+	sort.Strings(hosts)
+	m.MergedHosts = hosts
+	m.Password = newest.Password
+	m.Modified = newest.Modified
+	if m.IsDeleted {
+		m.DeletedAt = newest.DeletedAt
+	}
+	return m
 }
 
 func WebPasswords(items []Item) []WebPassword {
@@ -165,9 +264,17 @@ func WebPasswords(items []Item) []WebPassword {
 		result = append(result, wp)
 	}
 
+	result = mergeCredentials(result, website)
+
 	seen := make(map[string]bool, len(result))
 	for _, r := range result {
-		seen[r.Domain+"\x00"+r.Username] = true
+		hs := r.MergedHosts
+		if len(hs) == 0 {
+			hs = []string{r.Domain}
+		}
+		for _, h := range hs {
+			seen[h+"\x00"+r.Username] = true
+		}
 	}
 	for _, p := range personal {
 		if seen[p.srvr+"\x00"+p.acct] {
