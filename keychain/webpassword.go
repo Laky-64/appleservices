@@ -79,6 +79,10 @@ func credentialsPerDomain(items []Item) map[string]int {
 	return out
 }
 
+func IsWebsiteDomain(srvr string) bool {
+	return !uuid.IsCanonical(srvr)
+}
+
 func WebPasswords(items []Item) []WebPassword {
 	var manual, website []entryMeta
 	var personal []personalRec
@@ -139,7 +143,7 @@ func WebPasswords(items []Item) []WebPassword {
 		if it.Class != "inet" || it.Agrp != "com.apple.cfnetwork" {
 			continue
 		}
-		w := !uuid.IsCanonical(it.Srvr)
+		w := IsWebsiteDomain(it.Srvr)
 		companion := companionFor(manual, it.Srvr, it.Acct, accounts[it.Srvr] == 1)
 		wp := WebPassword{
 			Name:     title(it.Srvr, it.Acct),
@@ -172,8 +176,8 @@ func WebPasswords(items []Item) []WebPassword {
 		result = append(result, WebPassword{
 			Name:     firstNonEmpty(p.title, p.srvr),
 			Domain:   p.srvr,
-			Domains:  allDomains(p.srvr, !uuid.IsCanonical(p.srvr), nil),
-			Website:  !uuid.IsCanonical(p.srvr),
+			Domains:  allDomains(p.srvr, IsWebsiteDomain(p.srvr), nil),
+			Website:  IsWebsiteDomain(p.srvr),
 			Username: p.acct,
 			Password: p.secret,
 			Groups:   p.groups,
@@ -225,7 +229,7 @@ func deletedWebPasswords(items []Item, resolveTitle func(srvr, acct string) stri
 		if c.ref.RecordName != "" {
 			refs = append(refs, c.ref)
 		}
-		w := !uuid.IsCanonical(it.Srvr)
+		w := IsWebsiteDomain(it.Srvr)
 		wp := WebPassword{
 			Name:      title,
 			Domain:    it.Srvr,
@@ -264,7 +268,7 @@ func deletedWebPasswords(items []Item, resolveTitle func(srvr, acct string) stri
 		wp := WebPassword{
 			Name:      title,
 			Domain:    it.Srvr,
-			Website:   !uuid.IsCanonical(it.Srvr),
+			Website:   IsWebsiteDomain(it.Srvr),
 			Username:  it.Acct,
 			Password:  pw,
 			IsDeleted: true,
