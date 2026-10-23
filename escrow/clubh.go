@@ -11,22 +11,21 @@ func parseClubhSections(b []byte, n int) ([][]byte, error) {
 }
 
 func parseClubhAt(b []byte, tableOff, dataBase, n int) ([][]byte, error) {
-	if len(b) < dataBase {
+	if tableOff < 0 || dataBase < tableOff || len(b) < dataBase || n < 0 || n > (dataBase-tableOff)/4 {
 		return nil, fmt.Errorf("escrow: clubh blob too small (%d)", len(b))
 	}
-	be := func(o int) int { return int(binary.BigEndian.Uint32(b[o:])) }
 	out := make([][]byte, n)
-	for i := 0; i < n; i++ {
-		off := be(tableOff + i*4)
-		p := dataBase + off
-		if p+4 > len(b) {
+	for i := range n {
+		off := uint64(binary.BigEndian.Uint32(b[tableOff+i*4:]))
+		if len(b)-dataBase < 4 || off > uint64(len(b)-dataBase-4) {
 			return nil, fmt.Errorf("escrow: clubh section %d offset out of range", i)
 		}
-		ln := be(p)
-		if p+4+ln > len(b) {
+		p := dataBase + int(off)
+		ln := uint64(binary.BigEndian.Uint32(b[p:]))
+		if ln > uint64(len(b)-p-4) {
 			return nil, fmt.Errorf("escrow: clubh section %d len out of range", i)
 		}
-		out[i] = b[p+4 : p+4+ln]
+		out[i] = b[p+4 : p+4+int(ln)]
 	}
 	return out, nil
 }
@@ -58,29 +57,22 @@ func buildClubhBlob(tag uint32, nonce []byte, sections [][]byte) []byte {
 	return b
 }
 
-func buildRecoverBlob(nonce, clubID, M []byte) []byte {
-	var data bytes.Buffer
-	putSec := func(s []byte) {
-		var l [4]byte
-		binary.BigEndian.PutUint32(l[:], uint32(len(s)))
-		data.Write(l[:])
-		data.Write(s)
+func buildRecoverBlob(nonce, clubID, M []byte, version uint32) ([]byte, error) {
+	if len(nonce) != 16 || len(clubID) == 0 || len(clubID) > 16 || len(M) != 32 {
+		return nil, fmt.Errorf("escrow: invalid recover message dimensions")
 	}
-	off0 := 0
-	putSec(clubID)
-	off1 := data.Len()
-	putSec(M)
-	off2 := data.Len()
-
-	b := make([]byte, 0x28+data.Len())
+	b := make([]byte, 0x28+20+4+len(M))
 	put := func(o int, v uint32) { binary.BigEndian.PutUint32(b[o:], v) }
 	put(0x00, uint32(len(b)))
 	put(0x04, 0xa5)
-	put(0x08, 0)
+	put(0x08, version)
 	copy(b[0x0c:0x1c], nonce)
-	put(0x1c, uint32(off0))
-	put(0x20, uint32(off1))
-	put(0x24, uint32(off2))
-	copy(b[0x28:], data.Bytes())
-	return b
+	put(0x1c, 0)
+	put(0x20, 20)
+	put(0x24, uint32(len(b)-0x28))
+	put(0x28, uint32(len(clubID)))
+	copy(b[0x2c:0x3c], clubID)
+	put(0x3c, uint32(len(M)))
+	copy(b[0x40:], M)
+	return b, nil
 }

@@ -1,6 +1,7 @@
 package escrow
 
 import (
+	"cmp"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/binary"
@@ -16,14 +17,15 @@ import (
 
 	"github.com/Laky-64/appleservices/internal/httpx"
 	"github.com/Laky-64/appleservices/internal/srp"
+	"github.com/Laky-64/appleservices/internal/uuid"
 )
 
 var setupBaseURL = "https://setup.icloud.com"
 
 const (
-	escrowVersion = "1"
-	recordLabel   = "com.apple.securebackup.record"
-	petAuthScheme = "Basic"
+	recordLabel     = "com.apple.securebackup.record"
+	petAuthScheme   = "Basic"
+	userActionLabel = "com.apple.sbd: escrow recovery"
 )
 
 type Client struct {
@@ -36,10 +38,11 @@ func NewClient(escrowURL string, anisette map[string]string) *Client {
 }
 
 func (c *Client) Recover(appleID, accountPassword, pet, dsid, passcode, bottleID, escrowLabel string) ([]byte, error) {
-	recBody := plistBody(
-		`<key>version</key><integer>` + escrowVersion + `</integer>` +
-			`<key>command</key><string>GETRECORDS</string>` +
-			`<key>label</key><string>` + recordLabel + `</string>`)
+	transaction := strings.ToUpper(uuid.New())
+	recBody, err := escrowRequestBody("GETRECORDS", recordLabel, transaction, nil)
+	if err != nil {
+		return nil, err
+	}
 	rb, status, err := c.escrowPost("get_records", "Basic", appleID, accountPassword, recBody)
 	if err != nil {
 		return nil, err
@@ -63,11 +66,10 @@ func (c *Client) Recover(appleID, accountPassword, pet, dsid, passcode, bottleID
 	A := new(big.Int).Exp(g, aInt, N)
 	aBytes := leftPad(A.Bytes(), nWidth)
 
-	initBody := plistBody(
-		`<key>version</key><integer>` + escrowVersion + `</integer>` +
-			`<key>command</key><string>SRP_INIT</string>` +
-			`<key>label</key><string>` + label + `</string>` +
-			`<key>blob</key><string>` + base64.StdEncoding.EncodeToString(aBytes) + `</string>`)
+	initBody, err := escrowRequestBody("SRP_INIT", label, transaction, aBytes)
+	if err != nil {
+		return nil, err
+	}
 	sb, sstatus, err := c.escrowPost("srp_init", petAuthScheme, appleID, pet, initBody)
 	if err != nil {
 		return nil, err
@@ -75,12 +77,23 @@ func (c *Client) Recover(appleID, accountPassword, pet, dsid, passcode, bottleID
 	if sstatus != 200 {
 		return nil, fmt.Errorf("escrow: srp_init status %d (errorCode=%s)", sstatus, escrowErrCode(sb))
 	}
-	var initDoc map[string]any
+	var initDoc struct {
+		DSID       string `plist:"dsid"`
+		ClubTypeID uint32 `plist:"clubTypeID"`
+		RespBlob   string `plist:"respBlob"`
+	}
 	if _, err := plist.Unmarshal(sb, &initDoc); err != nil {
 		return nil, fmt.Errorf("escrow: decode srp_init: %w", err)
 	}
-	initRespB64, _ := initDoc["respBlob"].(string)
-	respBlob, err := base64.StdEncoding.DecodeString(initRespB64)
+	if initDoc.ClubTypeID > 1 {
+		return nil, fmt.Errorf("escrow: unsupported club type %d", initDoc.ClubTypeID)
+	}
+	version := uint32(0)
+	if initDoc.ClubTypeID == 1 {
+		version = 2
+	}
+	identity := cmp.Or(initDoc.DSID, dsid)
+	respBlob, err := base64.StdEncoding.DecodeString(initDoc.RespBlob)
 	if err != nil {
 		return nil, fmt.Errorf("escrow: decode srp_init respBlob: %w", err)
 	}
@@ -94,14 +107,19 @@ func (c *Client) Recover(appleID, accountPassword, pet, dsid, passcode, bottleID
 	clubID, salt, B := secs[0], secs[1], new(big.Int).SetBytes(secs[2])
 	nonce := respBlob[0x0c:0x1c]
 
-	M, Kses := computeEscrowM(N, g, aInt, A, B, salt, dsid, passcode)
-	recoverBlob := buildRecoverBlob(nonce, clubID, M)
+	M, Kses, err := computeEscrowM(N, g, aInt, A, B, salt, identity, passcode, version == 2)
+	if err != nil {
+		return nil, err
+	}
+	recoverBlob, err := buildRecoverBlob(nonce, clubID, M, version)
+	if err != nil {
+		return nil, err
+	}
 
-	recoverBody := plistBody(
-		`<key>version</key><integer>` + escrowVersion + `</integer>` +
-			`<key>command</key><string>RECOVER</string>` +
-			`<key>label</key><string>` + label + `</string>` +
-			`<key>blob</key><string>` + base64.StdEncoding.EncodeToString(recoverBlob) + `</string>`)
+	recoverBody, err := escrowRequestBody("RECOVER", label, transaction, recoverBlob)
+	if err != nil {
+		return nil, err
+	}
 	rr, rstatus, err := c.escrowPost("recover", petAuthScheme, appleID, pet, recoverBody)
 	if err != nil {
 		return nil, err
@@ -119,16 +137,28 @@ func (c *Client) Recover(appleID, accountPassword, pet, dsid, passcode, bottleID
 		return nil, fmt.Errorf("escrow: decode recover respBlob: %w", err)
 	}
 
-	return decodeRecoverPayload(recResp, Kses, passcode)
+	return decodeRecoverPayload(recResp, Kses, passcode, version)
 }
 
-func decodeRecoverPayload(recResp, sessionKey []byte, passcode string) ([]byte, error) {
-	rsecs, err := parseClubhSections(recResp, 3)
+func decodeRecoverPayload(recResp, sessionKey []byte, passcode string, version uint32) ([]byte, error) {
+	headerLen := 24
+	if version == 2 {
+		headerLen = 40
+		if len(recResp) < headerLen+4 || binary.BigEndian.Uint32(recResp[8:]) != version {
+			return nil, errors.New("escrow: invalid recover response version")
+		}
+	}
+	rsecs, err := parseClubhAt(recResp, headerLen+4, headerLen+20, 3)
 	if err != nil {
 		return nil, fmt.Errorf("escrow: parse recover resp sections: %w", err)
 	}
 	iv1, ct1 := rsecs[1], rsecs[2]
-	record, err := aesCBCDecrypt(sessionKey, iv1, ct1)
+	var record []byte
+	if version == 2 {
+		record, err = aesGCMDecrypt(sessionKey, iv1, ct1)
+	} else {
+		record, err = aesCBCDecrypt(sessionKey, iv1, ct1)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("escrow: layer-1 decrypt: %w", err)
 	}
@@ -136,6 +166,9 @@ func decodeRecoverPayload(recResp, sessionKey []byte, passcode string) ([]byte, 
 		return nil, errors.New("escrow: layer-1 record too short")
 	}
 	kekIters := int(binary.BigEndian.Uint32(record[0x0c:]))
+	if kekIters <= 0 {
+		return nil, errors.New("escrow: invalid record KDF iterations")
+	}
 	recSecs, err := parseClubhAt(record, 0x14, 0x30, 6)
 	if err != nil {
 		return nil, fmt.Errorf("escrow: parse record: %w", err)
@@ -291,10 +324,18 @@ func walkStrings(o any, path string, visit func(path, val string)) {
 	}
 }
 
-func plistBody(innerXML string) []byte {
-	return []byte(`<?xml version="1.0" encoding="UTF-8"?>` +
-		`<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">` +
-		`<plist version="1.0"><dict>` + innerXML + `</dict></plist>`)
+func escrowRequestBody(command, label, transaction string, blob []byte) ([]byte, error) {
+	body := map[string]any{
+		"version":         1,
+		"command":         command,
+		"label":           label,
+		"transactionUUID": transaction,
+		"userActionLabel": userActionLabel,
+	}
+	if blob != nil {
+		body["blob"] = base64.StdEncoding.EncodeToString(blob)
+	}
+	return plist.Marshal(body, plist.XMLFormat)
 }
 
 func escrowErrCode(body []byte) string {

@@ -28,3 +28,18 @@ func aesCBCDecrypt(key, iv, ciphertext []byte) ([]byte, error) {
 	cipher.NewCBCDecrypter(block, iv).CryptBlocks(out, ciphertext)
 	return out, nil
 }
+
+func aesGCMDecrypt(key, iv, ciphertext []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	if len(iv) != 16 {
+		return nil, fmt.Errorf("escrow: GCM nonce length %d != 16", len(iv))
+	}
+	gcm, err := cipher.NewGCMWithNonceSize(block, 16)
+	if err != nil {
+		return nil, err
+	}
+	return gcm.Open(nil, iv, ciphertext, nil)
+}
