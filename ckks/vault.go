@@ -160,15 +160,17 @@ func (v *Vault) Items(view string) ([]keychain.Item, error) {
 		return nil, err
 	}
 
-	keys, err := v.zoneKeysFor(view, records)
-	if err != nil {
-		return nil, err
-	}
-
+	var keys *zoneKeys
 	var items []keychain.Item
 	for _, rec := range records {
 		if rec.Type != "item" {
 			continue
+		}
+		if keys == nil {
+			keys, err = v.zoneKeysFor(view, records)
+			if err != nil {
+				return nil, err
+			}
 		}
 		item, err := decryptItemRecord(rec, keys.classKeys)
 		if err != nil {
