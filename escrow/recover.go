@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"strconv"
 	"strings"
 	"time"
 
@@ -231,6 +232,9 @@ func (c *Client) escrowPost(endpoint, scheme, user, pass string, body []byte) ([
 		http.Headers(headers),
 		http.Timeout(30*time.Second),
 	)
+	if result != nil && result.StatusCode != 200 {
+		return result.Body, result.StatusCode, nil
+	}
 	if err != nil {
 		return nil, 0, fmt.Errorf("escrow: %s request: %w", endpoint, err)
 	}
@@ -298,8 +302,19 @@ func escrowErrCode(body []byte) string {
 	if _, err := plist.Unmarshal(body, &doc); err != nil {
 		return "?"
 	}
-	if ec, ok := doc["errorCode"]; ok {
-		return fmt.Sprintf("%v", ec)
+	switch ec := doc["errorCode"].(type) {
+	case int64:
+		if ec >= -1<<31 && ec < 1<<31 {
+			return strconv.FormatInt(ec, 10)
+		}
+	case uint64:
+		if ec < 1<<31 {
+			return strconv.FormatUint(ec, 10)
+		}
+	case string:
+		if code, err := strconv.ParseInt(ec, 10, 32); err == nil {
+			return strconv.FormatInt(code, 10)
+		}
 	}
-	return ""
+	return "?"
 }
