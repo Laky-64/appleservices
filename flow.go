@@ -1,6 +1,7 @@
 package appleservices
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/sha256"
 	"crypto/x509"
@@ -597,6 +598,26 @@ func (pv *KeychainVault) DeletePasskeys(pks []keychain.Passkey) []BulkResult[key
 		}
 	}
 	return out
+}
+
+func (pv *KeychainVault) AddPasskey(pk keychain.Passkey) error {
+	items, err := pv.v.Items("Passwords")
+	if err != nil {
+		return fmt.Errorf("appleservices: AddPasskey: %w", err)
+	}
+	for _, existing := range keychain.Passkeys(items) {
+		if bytes.Equal(existing.CredentialID, pk.CredentialID) {
+			return nil
+		}
+	}
+	attrs, err := keychain.EncodePasskeyItem(pk)
+	if err != nil {
+		return fmt.Errorf("appleservices: %w", err)
+	}
+	if _, _, err := pv.v.AddItem("Passwords", attrs); err != nil {
+		return fmt.Errorf("appleservices: add passkey: %w", err)
+	}
+	return nil
 }
 
 func (pv *KeychainVault) RestorePasskey(pk keychain.Passkey) error {
