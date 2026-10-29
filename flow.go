@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"time"
 
 	"github.com/Laky-64/appleservices/anisette"
 	"github.com/Laky-64/appleservices/ckks"
@@ -616,6 +617,98 @@ func (pv *KeychainVault) AddPasskey(pk keychain.Passkey) error {
 	}
 	if _, _, err := pv.v.AddItem("Passwords", attrs); err != nil {
 		return fmt.Errorf("appleservices: add passkey: %w", err)
+	}
+	return nil
+}
+
+func (pv *KeychainVault) EditPasskey(pk keychain.Passkey, userName, note string) error {
+	items, err := pv.v.Items("Passwords")
+	if err != nil {
+		return fmt.Errorf("appleservices: EditPasskey: %w", err)
+	}
+	var rec *keychain.Item
+	for i := range items {
+		it := &items[i]
+		if it.Class != "keys" || it.Agrp != agrpWebauthn {
+			continue
+		}
+		if alis, _ := it.Attrs["alis"].([]byte); bytes.Equal(alis, pk.CredentialID) {
+			rec = it
+			break
+		}
+	}
+	if rec == nil {
+		return fmt.Errorf("appleservices: EditPasskey: passkey %q not found", pk.RelyingParty)
+	}
+	if userName != pk.UserName {
+		attrs, err := keychain.RenamedPasskeyItem(rec.Attrs, pk, userName)
+		if err != nil {
+			return fmt.Errorf("appleservices: %w", err)
+		}
+		if _, _, err := pv.v.AddItem("Passwords", attrs); err != nil {
+			return fmt.Errorf("appleservices: rename passkey: %w", err)
+		}
+		results, err := pv.v.DeleteRecords("Passwords", []keychain.DeletedRef{{RecordName: rec.Name, RecordEtag: rec.Etag}})
+		if err != nil {
+			return fmt.Errorf("appleservices: rename passkey (delete original): %w", err)
+		}
+		if sr := results[0]; sr.Code != 1 {
+			return fmt.Errorf("appleservices: rename passkey (delete original): %w", &cloudkit.SaveError{SaveResult: sr})
+		}
+	}
+	if note != pk.Note {
+		if err := pv.setPasskeyNote(items, pk, note); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (pv *KeychainVault) setPasskeyNote(items []keychain.Item, pk keychain.Passkey, note string) error {
+	acct := keychain.PasskeyMetadataAccount(pk.UserHandle)
+	for _, it := range items {
+		if it.Agrp != "com.apple.password-manager" || it.Srvr != pk.RelyingParty || it.Acct != acct {
+			continue
+		}
+		inner := keychain.DecodeCompanionInner(it.Data)
+		if inner == nil {
+			inner = map[string]any{}
+		}
+		if note == "" {
+			delete(inner, "notes")
+		} else {
+			inner["notes"] = []byte(note)
+		}
+		data, err := keychain.EncodeCompanionInner(inner)
+		if err != nil {
+			return fmt.Errorf("appleservices: %w", err)
+		}
+		attrs := make(map[string]any, len(it.Attrs))
+		for k, v := range it.Attrs {
+			attrs[k] = v
+		}
+		attrs["mdat"] = time.Now().UTC()
+		blob, err := keychain.EncodeItemWithSecret(attrs, data)
+		if err != nil {
+			return fmt.Errorf("appleservices: %w", err)
+		}
+		if _, err := pv.v.UpdateItem("Passwords", it.Name, it.Etag, blob); err != nil {
+			return fmt.Errorf("appleservices: passkey note: %w", err)
+		}
+		return nil
+	}
+	if note == "" {
+		return nil
+	}
+	blob, err := keychain.EncodeCompanionItem(pk.RelyingParty, acct, map[string]any{
+		"notes": []byte(note),
+		"s_as":  keychain.EncodeSiteAssociations([]string{pk.RelyingParty}),
+	})
+	if err != nil {
+		return fmt.Errorf("appleservices: %w", err)
+	}
+	if _, _, err := pv.v.AddItem("Passwords", blob); err != nil {
+		return fmt.Errorf("appleservices: passkey note: %w", err)
 	}
 	return nil
 }

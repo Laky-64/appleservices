@@ -5,6 +5,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/binary"
 	"fmt"
 	"strings"
@@ -17,6 +18,7 @@ type Passkey struct {
 	Title        string
 	UserName     string
 	DisplayName  string
+	Note         string
 	CredentialID []byte
 	UserHandle   []byte
 	PrivateKey   *ecdsa.PrivateKey
@@ -27,8 +29,20 @@ type Passkey struct {
 	Record       DeletedRef
 }
 
+func PasskeyMetadataAccount(userHandle []byte) string {
+	return base64.StdEncoding.EncodeToString(userHandle)
+}
+
 func Passkeys(items []Item) []Passkey {
 	wn := websiteNames(items)
+	notes := map[string]string{}
+	for _, it := range items {
+		if it.Agrp == "com.apple.password-manager" {
+			if note := asString(parsePlist(it.Data)["notes"]); note != "" {
+				notes[it.Srvr+"\x00"+it.Acct] = note
+			}
+		}
+	}
 	var result []Passkey
 	for _, it := range items {
 		deleted := it.Agrp == "com.apple.webkit.webauthn-recently-deleted"
@@ -48,6 +62,7 @@ func Passkeys(items []Item) []Passkey {
 			DisplayName:  displayName,
 			CredentialID: asBytes(it.Attrs["alis"]),
 			UserHandle:   userHandle,
+			Note:         notes[it.Labl+"\x00"+PasskeyMetadataAccount(userHandle)],
 			PrivateKey:   key,
 			IsDeleted:    deleted,
 			Record:       DeletedRef{RecordName: it.Name, RecordEtag: it.Etag},

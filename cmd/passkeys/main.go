@@ -33,8 +33,8 @@ func run() error {
 	server := flag.String("anisette", os.Getenv("APPLESERVICES_ANISETTE"), "anisette server URL (or APPLESERVICES_ANISETTE)")
 	flag.Parse()
 	command := flag.Arg(0)
-	if command != "attrs" && command != "add-test" && command != "purge-test" {
-		return fmt.Errorf("usage: passkeys [flags] attrs|add-test|purge-test")
+	if command != "attrs" && command != "add-test" && command != "purge-test" && command != "inspect-test" && command != "edit-test" {
+		return fmt.Errorf("usage: passkeys [flags] attrs|add-test|purge-test|inspect-test|edit-test")
 	}
 
 	if *appleID == "" || *password == "" {
@@ -127,6 +127,10 @@ func run() error {
 		return addTest(kc)
 	case "purge-test":
 		return purgeTest(kc)
+	case "inspect-test":
+		return inspectTest(kc)
+	case "edit-test":
+		return editTest(kc)
 	}
 	items, err := kc.Items()
 	if err != nil {
@@ -240,5 +244,22 @@ func purgeTest(kc *appleservices.KeychainVault) error {
 		}
 	}
 	fmt.Printf("purged %d %s passkeys\n", len(deleted), testRelyingParty)
+	return nil
+}
+
+func editTest(kc *appleservices.KeychainVault) error {
+	all, err := kc.Passkeys()
+	if err != nil {
+		return err
+	}
+	for _, pk := range all {
+		if pk.RelyingParty != testRelyingParty || pk.IsDeleted {
+			continue
+		}
+		if err := kc.EditPasskey(pk, "renvault-edit2", "renvault nota da RenVault 2"); err != nil {
+			return err
+		}
+		fmt.Printf("edited %s %s\n", testRelyingParty, pk.UserName)
+	}
 	return nil
 }

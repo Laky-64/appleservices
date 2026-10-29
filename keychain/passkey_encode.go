@@ -112,3 +112,18 @@ func appendCBORHead(out []byte, major byte, n int) []byte {
 		return append(out, major<<5|26, byte(n>>24), byte(n>>16), byte(n>>8), byte(n))
 	}
 }
+
+func RenamedPasskeyItem(attrs map[string]any, pk Passkey, userName string) ([]byte, error) {
+	out := make(map[string]any, len(attrs))
+	for k, v := range attrs {
+		out[k] = v
+	}
+	out["atag"] = encodeAtag(pk.UserHandle, userName, pk.DisplayName)
+	out["mdat"] = time.Now().UTC()
+	delete(out, "sha1")
+	data, err := plist.Marshal(out, plist.BinaryFormat)
+	if err != nil {
+		return nil, fmt.Errorf("keychain: encode renamed passkey: %w", err)
+	}
+	return data, nil
+}
