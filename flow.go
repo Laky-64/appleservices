@@ -621,7 +621,7 @@ func (pv *KeychainVault) AddPasskey(pk keychain.Passkey) error {
 	return nil
 }
 
-func (pv *KeychainVault) EditPasskey(pk keychain.Passkey, userName, note string) error {
+func (pv *KeychainVault) EditPasskey(pk keychain.Passkey, title, userName, note string, sites []string) error {
 	items, err := pv.v.Items("Passwords")
 	if err != nil {
 		return fmt.Errorf("appleservices: EditPasskey: %w", err)
@@ -656,15 +656,17 @@ func (pv *KeychainVault) EditPasskey(pk keychain.Passkey, userName, note string)
 			return fmt.Errorf("appleservices: rename passkey (delete original): %w", &cloudkit.SaveError{SaveResult: sr})
 		}
 	}
-	if note != pk.Note {
-		if err := pv.setPasskeyNote(items, pk, note); err != nil {
+	sites = keychain.PasskeySites(pk.RelyingParty, sites)
+	if title != pk.Title || note != pk.Note || !slices.Equal(sites, pk.Sites) {
+		if err := pv.setPasskeyMetadata(items, pk, title, note, sites); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (pv *KeychainVault) setPasskeyNote(items []keychain.Item, pk keychain.Passkey, note string) error {
+func (pv *KeychainVault) setPasskeyMetadata(items []keychain.Item, pk keychain.Passkey, title, note string, sites []string) error {
+	associations := keychain.EncodeSiteAssociations(sites)
 	acct := keychain.PasskeyMetadataAccount(pk.UserHandle)
 	for _, it := range items {
 		if it.Agrp != "com.apple.password-manager" || it.Srvr != pk.RelyingParty || it.Acct != acct {
@@ -678,6 +680,14 @@ func (pv *KeychainVault) setPasskeyNote(items []keychain.Item, pk keychain.Passk
 			delete(inner, "notes")
 		} else {
 			inner["notes"] = []byte(note)
+		}
+		inner["s_as"] = associations
+		if title != pk.Title {
+			if title == "" {
+				delete(inner, "title")
+			} else {
+				inner["title"] = []byte(title)
+			}
 		}
 		data, err := keychain.EncodeCompanionInner(inner)
 		if err != nil {
@@ -697,13 +707,18 @@ func (pv *KeychainVault) setPasskeyNote(items []keychain.Item, pk keychain.Passk
 		}
 		return nil
 	}
-	if note == "" {
+	retitle := title != pk.Title && title != ""
+	if note == "" && len(sites) == 0 && !retitle {
 		return nil
 	}
-	blob, err := keychain.EncodeCompanionItem(pk.RelyingParty, acct, map[string]any{
-		"notes": []byte(note),
-		"s_as":  keychain.EncodeSiteAssociations([]string{pk.RelyingParty}),
-	})
+	inner := map[string]any{"s_as": associations}
+	if note != "" {
+		inner["notes"] = []byte(note)
+	}
+	if retitle {
+		inner["title"] = []byte(title)
+	}
+	blob, err := keychain.EncodeCompanionItem(pk.RelyingParty, acct, inner)
 	if err != nil {
 		return fmt.Errorf("appleservices: %w", err)
 	}

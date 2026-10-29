@@ -1,6 +1,7 @@
 package keychain
 
 import (
+	"cmp"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -8,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -19,6 +21,7 @@ type Passkey struct {
 	UserName     string
 	DisplayName  string
 	Note         string
+	Sites        []string
 	CredentialID []byte
 	UserHandle   []byte
 	PrivateKey   *ecdsa.PrivateKey
@@ -35,12 +38,16 @@ func PasskeyMetadataAccount(userHandle []byte) string {
 
 func Passkeys(items []Item) []Passkey {
 	wn := websiteNames(items)
-	notes := map[string]string{}
+	type passkeyMeta struct {
+		title string
+		note  string
+		sites []string
+	}
+	metas := map[string]passkeyMeta{}
 	for _, it := range items {
 		if it.Agrp == "com.apple.password-manager" {
-			if note := asString(parsePlist(it.Data)["notes"]); note != "" {
-				notes[it.Srvr+"\x00"+it.Acct] = note
-			}
+			d := parsePlist(it.Data)
+			metas[it.Srvr+"\x00"+it.Acct] = passkeyMeta{title: asString(d["title"]), note: asString(d["notes"]), sites: siteAssociations(d["s_as"])}
 		}
 	}
 	var result []Passkey
@@ -57,12 +64,13 @@ func Passkeys(items []Item) []Passkey {
 		userHandle, userName, displayName := parseAtagCredential(atag)
 		pk := Passkey{
 			RelyingParty: it.Labl,
-			Title:        siteTitle(it.Labl, wn),
+			Title:        cmp.Or(metas[it.Labl+"\x00"+PasskeyMetadataAccount(userHandle)].title, siteTitle(it.Labl, wn)),
 			UserName:     userName,
 			DisplayName:  displayName,
 			CredentialID: asBytes(it.Attrs["alis"]),
 			UserHandle:   userHandle,
-			Note:         notes[it.Labl+"\x00"+PasskeyMetadataAccount(userHandle)],
+			Note:         metas[it.Labl+"\x00"+PasskeyMetadataAccount(userHandle)].note,
+			Sites:        PasskeySites(it.Labl, metas[it.Labl+"\x00"+PasskeyMetadataAccount(userHandle)].sites),
 			PrivateKey:   key,
 			IsDeleted:    deleted,
 			Record:       DeletedRef{RecordName: it.Name, RecordEtag: it.Etag},
@@ -233,4 +241,15 @@ func (p Passkey) Sign(clientDataHash []byte, flags byte, signCount uint32) (auth
 		return nil, nil, fmt.Errorf("keychain: sign assertion: %w", err)
 	}
 	return authenticatorData, signature, nil
+}
+
+func PasskeySites(relyingParty string, sites []string) []string {
+	var out []string
+	for _, site := range sites {
+		if site == "" || site == relyingParty || slices.Contains(out, site) {
+			continue
+		}
+		out = append(out, site)
+	}
+	return out
 }

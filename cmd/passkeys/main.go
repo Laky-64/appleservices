@@ -256,7 +256,7 @@ func editTest(kc *appleservices.KeychainVault) error {
 		if pk.RelyingParty != testRelyingParty || pk.IsDeleted {
 			continue
 		}
-		if err := kc.EditPasskey(pk, "renvault-edit2", "renvault nota da RenVault 2"); err != nil {
+		if err := kc.EditPasskey(pk, "Renvault da RenVault", "renvault-edit2", "renvault nota da RenVault 2", []string{"renvault-sito.invalid", "renvault-sito2.invalid"}); err != nil {
 			return err
 		}
 		fmt.Printf("edited %s %s\n", testRelyingParty, pk.UserName)
