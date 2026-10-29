@@ -18,6 +18,8 @@ import (
 type Passkey struct {
 	RelyingParty string
 	Title        string
+	CustomTitle  string
+	SiteTitle    string
 	UserName     string
 	DisplayName  string
 	Note         string
@@ -65,6 +67,8 @@ func Passkeys(items []Item) []Passkey {
 		pk := Passkey{
 			RelyingParty: it.Labl,
 			Title:        cmp.Or(metas[it.Labl+"\x00"+PasskeyMetadataAccount(userHandle)].title, siteTitle(it.Labl, wn)),
+			CustomTitle:  metas[it.Labl+"\x00"+PasskeyMetadataAccount(userHandle)].title,
+			SiteTitle:    siteTitle(it.Labl, wn),
 			UserName:     userName,
 			DisplayName:  displayName,
 			CredentialID: asBytes(it.Attrs["alis"]),

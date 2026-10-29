@@ -657,7 +657,7 @@ func (pv *KeychainVault) EditPasskey(pk keychain.Passkey, title, userName, note 
 		}
 	}
 	sites = keychain.PasskeySites(pk.RelyingParty, sites)
-	if title != pk.Title || note != pk.Note || !slices.Equal(sites, pk.Sites) {
+	if title != pk.CustomTitle || note != pk.Note || !slices.Equal(sites, pk.Sites) {
 		if err := pv.setPasskeyMetadata(items, pk, title, note, sites); err != nil {
 			return err
 		}
@@ -682,7 +682,7 @@ func (pv *KeychainVault) setPasskeyMetadata(items []keychain.Item, pk keychain.P
 			inner["notes"] = []byte(note)
 		}
 		inner["s_as"] = associations
-		if title != pk.Title {
+		if title != pk.CustomTitle {
 			if title == "" {
 				delete(inner, "title")
 			} else {
@@ -707,7 +707,7 @@ func (pv *KeychainVault) setPasskeyMetadata(items []keychain.Item, pk keychain.P
 		}
 		return nil
 	}
-	retitle := title != pk.Title && title != ""
+	retitle := title != pk.CustomTitle && title != ""
 	if note == "" && len(sites) == 0 && !retitle {
 		return nil
 	}
