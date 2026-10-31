@@ -1,11 +1,13 @@
 package anisette
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/Laky-64/http"
@@ -16,6 +18,7 @@ const DefaultServerListURL = "https://servers.sidestore.io/servers.json"
 type Server struct {
 	Name    string `json:"name"`
 	Address string `json:"address"`
+	Kind    int    `json:"kind,omitempty"`
 }
 
 var fallbackServers = []Server{
@@ -38,12 +41,18 @@ func NewServerList(cachePath, listURL string) *ServerList {
 func (l *ServerList) Servers() []Server {
 	if servers, err := l.fetch(); err == nil && len(servers) > 0 {
 		_ = l.writeCache(servers)
-		return servers
+		return byKind(servers)
 	}
 	if servers, err := l.readCache(); err == nil && len(servers) > 0 {
-		return servers
+		return byKind(servers)
 	}
 	return fallbackServers
+}
+
+func byKind(servers []Server) []Server {
+	sorted := slices.Clone(servers)
+	slices.SortStableFunc(sorted, func(a, b Server) int { return cmp.Compare(b.Kind, a.Kind) })
+	return sorted
 }
 
 func (l *ServerList) fetch() ([]Server, error) {
