@@ -109,23 +109,18 @@ func registrableDomain(srvr string, website []entryMeta) string {
 
 func siteKey(e WebPassword, website []entryMeta) (string, string) {
 	site := registrableDomain(e.Domain, website)
-	if site != e.Domain && site != strings.TrimPrefix(e.Domain, "www.") {
-		return site, site + "\x00" + e.Username
+	if !strings.Contains(e.Domain, ":") && net.ParseIP(e.Domain) == nil {
+		if root, err := publicsuffix.EffectiveTLDPlusOne(site); err == nil {
+			site = root
+		}
 	}
-	if strings.Contains(e.Domain, ":") || net.ParseIP(e.Domain) != nil {
-		return site, site + "\x00" + e.Username
-	}
-	root, err := publicsuffix.EffectiveTLDPlusOne(e.Domain)
-	if err != nil {
-		return site, site + "\x00" + e.Username
-	}
-	key := root
+	key := site
 	if siteGroup != nil {
-		if group, ok := siteGroup(root); ok {
+		if group, ok := siteGroup(site); ok {
 			key = group
 		}
 	}
-	return root, key + "\x00" + e.Username + "\x00" + e.Password
+	return site, key + "\x00" + e.Username + "\x00" + e.Password
 }
 
 var siteGroup func(domain string) (string, bool)
