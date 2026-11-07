@@ -3,12 +3,14 @@ package keychain
 import (
 	"encoding/base32"
 	"fmt"
+	"net"
 	"net/url"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/Laky-64/appleservices/internal/uuid"
+	"golang.org/x/net/publicsuffix"
 	"howett.net/plist"
 )
 
@@ -105,8 +107,38 @@ func registrableDomain(srvr string, website []entryMeta) string {
 	return best
 }
 
+func siteKey(e WebPassword, website []entryMeta) (string, string) {
+	site := registrableDomain(e.Domain, website)
+	if site != e.Domain && site != strings.TrimPrefix(e.Domain, "www.") {
+		return site, site + "\x00" + e.Username
+	}
+	if strings.Contains(e.Domain, ":") || net.ParseIP(e.Domain) != nil {
+		return site, site + "\x00" + e.Username
+	}
+	root, err := publicsuffix.EffectiveTLDPlusOne(e.Domain)
+	if err != nil {
+		return site, site + "\x00" + e.Username
+	}
+	key := root
+	if siteGroup != nil {
+		if group, ok := siteGroup(root); ok {
+			key = group
+		}
+	}
+	return root, key + "\x00" + e.Username + "\x00" + e.Password
+}
+
+var siteGroup func(domain string) (string, bool)
+
+func SetSiteGroups(lookup func(domain string) (string, bool)) {
+	siteGroup = lookup
+}
+
 func mergeCredentials(entries []WebPassword, website []entryMeta) []WebPassword {
-	type group struct{ members []WebPassword }
+	type group struct {
+		site    string
+		members []WebPassword
+	}
 	groups := map[string]*group{}
 	var order []string
 	var out []WebPassword
@@ -115,10 +147,10 @@ func mergeCredentials(entries []WebPassword, website []entryMeta) []WebPassword 
 			out = append(out, e)
 			continue
 		}
-		k := registrableDomain(e.Domain, website) + "\x00" + e.Username
+		site, k := siteKey(e, website)
 		g, ok := groups[k]
 		if !ok {
-			g = &group{}
+			g = &group{site: site}
 			groups[k] = g
 			order = append(order, k)
 		}
@@ -130,7 +162,7 @@ func mergeCredentials(entries []WebPassword, website []entryMeta) []WebPassword 
 			out = append(out, g.members[0])
 			continue
 		}
-		out = append(out, mergeGroup(g.members, registrableDomain(g.members[0].Domain, website)))
+		out = append(out, mergeGroup(g.members, g.site))
 	}
 	return out
 }
