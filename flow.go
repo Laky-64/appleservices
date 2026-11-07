@@ -884,16 +884,52 @@ func (pv *KeychainVault) EditWebPasswordIn(items []keychain.Item, p keychain.Web
 	if credUpdated == 0 {
 		return fmt.Errorf("appleservices: EditWebPassword: no active entry for %q (%s)", p.Domain, p.Username)
 	}
-	if newDomain == p.Domain && newUsername == p.Username {
+	changed := p.Password != "" && newPassword != p.Password
+	renamed := newDomain != p.Domain || newUsername != p.Username
+	now := time.Now()
+	if renamed {
+		if i := companionIndex(items, p.Domain, p.Username); i >= 0 {
+			inner := keychain.DecodeCompanionInner(items[i].Data)
+			if inner == nil {
+				inner = map[string]any{}
+			}
+			if changed {
+				keychain.AppendPasswordChange(inner, p.Password, newPassword, now)
+			}
+			if err := pv.writeCompanion(items, i, newDomain, newUsername, inner); err != nil {
+				return fmt.Errorf("appleservices: edit web password (rename companion): %w", err)
+			}
+			return nil
+		}
+	}
+	if !changed {
 		return nil
 	}
-	if i := companionIndex(items, p.Domain, p.Username); i >= 0 {
+	hosts := hostsOf(p)
+	if renamed {
+		hosts = []string{newDomain}
+	}
+	idxs := companionIndexesAcrossHosts(items, hosts, newUsername)
+	if len(idxs) == 0 {
+		inner := map[string]any{"s_as": []any{}}
+		keychain.AppendPasswordChange(inner, p.Password, newPassword, now)
+		blob, err := keychain.EncodeCompanionItem(hosts[0], newUsername, inner)
+		if err != nil {
+			return fmt.Errorf("appleservices: %w", err)
+		}
+		if _, _, err := pv.v.AddItem("Passwords", blob); err != nil {
+			return fmt.Errorf("appleservices: edit web password (history): %w", err)
+		}
+		return nil
+	}
+	for _, i := range idxs {
 		inner := keychain.DecodeCompanionInner(items[i].Data)
 		if inner == nil {
 			inner = map[string]any{}
 		}
-		if err := pv.writeCompanion(items, i, newDomain, newUsername, inner); err != nil {
-			return fmt.Errorf("appleservices: edit web password (rename companion): %w", err)
+		keychain.AppendPasswordChange(inner, p.Password, newPassword, now)
+		if err := pv.writeCompanion(items, i, items[i].Srvr, newUsername, inner); err != nil {
+			return fmt.Errorf("appleservices: edit web password (history): %w", err)
 		}
 	}
 	return nil

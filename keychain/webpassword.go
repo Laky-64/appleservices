@@ -13,22 +13,28 @@ import (
 )
 
 type WebPassword struct {
-	Name      string
-	Domain    string
-	Domains   []string
-	MergedHosts     []string
-	Website   bool
-	Username  string
-	Password  string
-	TOTP      string
-	Note      string
-	Created   time.Time
-	Modified  time.Time
-	IsDeleted bool
-	DeletedAt time.Time
-	Deleted   []DeletedRef
-	Groups    []Group
-	Shared    bool
+	Name        string
+	Domain      string
+	Domains     []string
+	MergedHosts []string
+	Website     bool
+	Username    string
+	Password    string
+	TOTP        string
+	Note        string
+	Created     time.Time
+	Modified    time.Time
+	IsDeleted   bool
+	DeletedAt   time.Time
+	Deleted     []DeletedRef
+	Groups      []Group
+	Shared      bool
+	History     []PasswordChange
+}
+
+type PasswordChange struct {
+	Password string
+	At       time.Time
 }
 
 type DeletedRef struct {
@@ -171,7 +177,9 @@ func mergeGroup(members []WebPassword, regDomain string) WebPassword {
 		}
 		m.IsDeleted = m.IsDeleted || e.IsDeleted
 		m.Deleted = append(m.Deleted, e.Deleted...)
+		m.History = append(m.History, e.History...)
 	}
+	m.History = tidyChanges(m.History)
 	sort.Strings(hosts)
 	m.MergedHosts = hosts
 	m.Password = newest.Password
@@ -186,10 +194,14 @@ func WebPasswords(items []Item) []WebPassword {
 	var manual, website []entryMeta
 	var personal []personalRec
 	accounts := credentialsPerDomain(items)
+	history := map[string][]PasswordChange{}
 	for _, it := range items {
 		switch it.Agrp {
 		case "com.apple.password-manager":
 			dict := parsePlist(it.Data)
+			if changes := passwordChanges(dict["s_hi"]); len(changes) > 0 {
+				history[it.Srvr+"\x00"+it.Acct] = changes
+			}
 			m := entryMeta{srvr: it.Srvr, acct: it.Acct, title: asString(dict["title"]), totp: totpURL(dict["totp"]), note: asString(dict["notes"]), domains: siteAssociations(dict["s_as"])}
 			if m.title != "" || m.totp != "" || m.note != "" || len(m.domains) > 0 {
 				manual = append(manual, m)
@@ -254,6 +266,7 @@ func WebPasswords(items []Item) []WebPassword {
 			TOTP:     companion.totp,
 			Note:     companion.note,
 			Groups:   groups(it.Srvr, it.Acct),
+			History:  history[it.Srvr+"\x00"+it.Acct],
 		}
 		if cdat, ok := it.Attrs["cdat"].(time.Time); ok {
 			wp.Created = cdat
@@ -437,6 +450,55 @@ type personalRec struct {
 	groups     []Group
 	title      string
 	secret     string
+}
+
+func passwordChanges(v any) []PasswordChange {
+	arr, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	var out []PasswordChange
+	for _, e := range arr {
+		m, ok := e.(map[string]any)
+		if !ok || asString(m["t"]) != "pwch" {
+			continue
+		}
+		old := asString(m["op"])
+		if old == "" {
+			continue
+		}
+		at, _ := m["d"].(time.Time)
+		out = append(out, PasswordChange{Password: old, At: at})
+	}
+	return tidyChanges(out)
+}
+
+func tidyChanges(changes []PasswordChange) []PasswordChange {
+	sort.SliceStable(changes, func(i, j int) bool { return changes[i].At.After(changes[j].At) })
+	seen := map[string]bool{}
+	out := changes[:0]
+	for _, c := range changes {
+		if seen[c.Password] {
+			continue
+		}
+		seen[c.Password] = true
+		out = append(out, c)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func AppendPasswordChange(inner map[string]any, old, next string, at time.Time) {
+	arr, _ := inner["s_hi"].([]any)
+	inner["s_hi"] = append(arr, map[string]any{
+		"t":  "pwch",
+		"d":  at.UTC(),
+		"id": strings.ToUpper(uuid.New()),
+		"p":  next,
+		"op": old,
+	})
 }
 
 func currentSecret(v any) string {
